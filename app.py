@@ -58,7 +58,6 @@ if "success_message" not in st.session_state:
 
 # --- 共用：要求輸入綽號的 UI 元件 ---
 def require_nickname():
-    # 讓使用者在介面頂端輸入綽號
     nickname_input = st.text_input("👤 請先輸入您的綽號 (輸入後即可開始操作)：", value=st.session_state.nickname, placeholder="例如：小明")
     if nickname_input != st.session_state.nickname:
         st.session_state.nickname = nickname_input
@@ -66,7 +65,7 @@ def require_nickname():
         
     if not st.session_state.nickname.strip():
         st.warning("⚠️ 必須填寫綽號才能繼續進行後續動作喔！")
-        st.stop() # 停止渲染下方的介面，直到輸入綽號為止
+        st.stop() 
 
 # --- 護理師專用：備物確認彈出視窗 ---
 @st.dialog("⚠️ 護理師派發確認")
@@ -143,11 +142,24 @@ def np_feedback_dialog(task_id):
         st.session_state.success_message = "✅ 任務結案與回報完成！"
         st.rerun()
 
+# --- 後台專用：清除紀錄彈出視窗 ---
+@st.dialog("⚠️ 警告：清除所有紀錄")
+def clear_records_dialog():
+    st.error("您即將清除系統中的「所有」任務紀錄！此動作無法復原。")
+    pwd = st.text_input("請輸入系統密碼以確認", type="password")
+    
+    if st.button("🚨 確認清除", type="primary", use_container_width=True):
+        if pwd == "6155":
+            save_data([]) # 儲存空的 list 覆蓋現有資料
+            st.session_state.success_message = "✅ 系統內所有紀錄已成功清除！"
+            st.rerun()
+        else:
+            st.error("密碼錯誤，拒絕清除！")
+
 # --- 醫師/護理師共用介面 (派發任務) ---
 def assigner_interface():
     st.header(f"👋 {st.session_state.role} 介面")
     
-    # 呼叫綽號輸入檢查
     require_nickname()
     
     if st.session_state.success_message:
@@ -195,7 +207,6 @@ def assigner_interface():
         details = f"目的: {ng_type}"
         
     elif task_type == "Suture (縫合)":
-        # 更新縫合部位選項
         s_part = st.selectbox("部位", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"])
         s_line = st.selectbox("縫線選擇", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0"])
         details = f"部位: {s_part} | 縫線: {s_line}"
@@ -244,7 +255,6 @@ def assigner_interface():
 def np_interface():
     st.header(f"👩‍⚕️ 專科護理師介面")
     
-    # 呼叫綽號輸入檢查
     require_nickname()
     
     if st.session_state.success_message:
@@ -339,24 +349,56 @@ def whiteboard_interface():
         else:
             st.info("目前無正在執行的任務。")
 
-# --- 後台紀錄介面 (無密碼版) ---
+# --- 後台紀錄介面 ---
 def backend_interface():
     st.header("📂 後台紀錄管理")
-    st.markdown("檢視所有歷史派發與**專師執行回報紀錄**。")
+    
+    # 接收來自清除紀錄彈窗的成功訊息
+    if st.session_state.success_message:
+        st.success(st.session_state.success_message)
+        st.session_state.success_message = ""
     
     tasks = load_data()
-    if tasks:
-        df = pd.DataFrame(tasks)
-        if 'feedback' not in df.columns:
-            df['feedback'] = ""
-            
-        df = df[['time', 'bed', 'task_type', 'details', 'feedback', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
-        df.columns = ['發布時間', '床位', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
-        df = df.sort_values(by='發布時間', ascending=False)
+    
+    # 建立頂部控制列：文字說明、匯出按鈕、清除按鈕
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        st.markdown("檢視所有歷史派發與**專師執行回報紀錄**。")
         
+    with col2:
+        if tasks:
+            # 轉換為 DataFrame 並排序
+            df = pd.DataFrame(tasks)
+            if 'feedback' not in df.columns:
+                df['feedback'] = ""
+            df = df[['time', 'bed', 'task_type', 'details', 'feedback', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
+            df.columns = ['發布時間', '床位', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
+            df = df.sort_values(by='發布時間', ascending=False)
+            
+            # 使用 utf-8-sig 編碼轉為 CSV，讓 Excel 開啟不亂碼
+            csv_data = df.to_csv(index=False, encoding='utf-8-sig')
+            
+            # 建立下載按鈕
+            current_date = datetime.now().strftime("%Y%m%d")
+            st.download_button(
+                label="📥 匯出 Excel (CSV格式)",
+                data=csv_data,
+                file_name=f"ER_Tasks_Record_{current_date}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            
+    with col3:
+        if st.button("🗑️ 清除所有紀錄", use_container_width=True):
+            clear_records_dialog()
+            
+    st.markdown("---")
+
+    # 顯示資料表
+    if tasks:
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
-        st.write("目前系統尚無任何派發紀錄。")
+        st.info("目前系統尚無任何派發紀錄。")
 
 # --- 主程式邏輯 ---
 def main():
@@ -373,7 +415,6 @@ def main():
         st.markdown("---")
         st.write("🔄 狀態：每 5 分鐘自動同步")
 
-    # 根據左側選單進入對應頁面，設定角色並執行介面
     if page == "👨‍⚕️ 醫師 (派發任務)":
         st.session_state.role = "醫師"
         assigner_interface()
