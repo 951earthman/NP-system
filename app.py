@@ -55,15 +55,17 @@ if "role" not in st.session_state:
     st.session_state.role = ""
 if "is_logged_in" not in st.session_state:
     st.session_state.is_logged_in = False
+if "backend_auth" not in st.session_state:
+    st.session_state.backend_auth = False # 後台專屬認證狀態
 
 # --- 登入介面 ---
 def login_page():
-    st.title("🏥 急診專師協助派發系統 - 登入")
+    st.title("🏥 急診專師協助派發系統")
+    st.markdown("請輸入您的綽號與身分以進入系統。")
     
     with st.form("login_form"):
         nickname_input = st.text_input("輸入綽號 (必填)")
         role_input = st.selectbox("選擇身分", ["請選擇...", "醫師/護理師 (派發任務)", "專科護理師 (執行任務)"])
-        password_input = st.text_input("系統密碼", type="password")
         submit_button = st.form_submit_button("登入")
         
         if submit_button:
@@ -71,8 +73,6 @@ def login_page():
                 st.error("請輸入綽號！")
             elif role_input == "請選擇...":
                 st.error("請選擇身分！")
-            elif password_input != "6155":
-                st.error("密碼錯誤，請重新輸入！")
             else:
                 st.session_state.nickname = nickname_input.strip()
                 st.session_state.role = "醫師/護理師" if "派發" in role_input else "專科護理師"
@@ -84,16 +84,12 @@ def assigner_interface():
     st.header(f"👋 {st.session_state.role} {st.session_state.nickname}，您好！")
     st.markdown("---")
     
-    # 將畫面分為上下兩塊：先選床位，再選任務細節
     st.subheader("📍 步驟 1：選擇位置")
-    
-    # 1. 選擇大區域
     area = st.radio("【 1. 先選大區域 】", list(BED_DATA_COMPLEX.keys()), horizontal=True)
     
     final_bed = ""
     bed_note = ""
     
-    # 2. 根據大區域動態顯示子層選項
     if area in ["留觀(OBS)", "診間"]:
         sub_area = st.radio(f"【 2. 選擇 {area} 區域 】", list(BED_DATA_COMPLEX[area].keys()), horizontal=True)
         bed_num = st.radio(f"【 3. 選擇 {sub_area} 床號 】", BED_DATA_COMPLEX[area][sub_area], horizontal=True)
@@ -104,7 +100,6 @@ def assigner_interface():
         final_bed = f"兒科 {bed_num}床"
         
     else:
-        # 特殊區域顯示備註欄位
         bed_note = st.text_input(f"【 2. {area} 備註 (選填) 】", placeholder="例如：等待推床、暫放走廊...")
         final_bed = area
         if bed_note:
@@ -140,7 +135,6 @@ def assigner_interface():
         med_type = st.radio("藥物類別", ["續開", "大量點滴"], horizontal=True)
         details = f"類別: {med_type}"
 
-    # 確認送出區塊
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🚀 確認無誤，送出請求給專師", use_container_width=True, type="primary"):
         if task_type == "會診" and not consult_dept:
@@ -170,7 +164,6 @@ def np_interface():
     
     tasks = load_data()
     pending_tasks = [t for t in tasks if t['status'] == '待處理']
-    # 篩選出自己正在執行的任務
     in_progress_tasks = [t for t in tasks if t['status'] == '執行中' and t['handler'] == st.session_state.nickname]
     
     col1, col2 = st.columns(2)
@@ -179,7 +172,6 @@ def np_interface():
         st.subheader(f"🔔 待接單任務 ({len(pending_tasks)} 筆)")
         if pending_tasks:
             for t in pending_tasks:
-                # 超時判定邏輯：任務建立時間後一小時
                 task_time = datetime.strptime(t['time'], "%Y-%m-%d %H:%M:%S")
                 overdue_time = task_time + timedelta(hours=1)
                 is_overdue = datetime.now() > overdue_time
@@ -231,8 +223,6 @@ def whiteboard_interface():
     
     pending = [t for t in tasks if t['status'] == '待處理']
     in_progress = [t for t in tasks if t['status'] == '執行中']
-    
-    # 找出正在執行任務的獨特專師名單
     active_nps = list(set([t['handler'] for t in in_progress if t['handler']]))
     
     col1, col2, col3 = st.columns(3)
@@ -248,7 +238,6 @@ def whiteboard_interface():
         st.subheader("🚨 未接單清單")
         if pending:
             df_pending = pd.DataFrame(pending)[['time', 'bed', 'task_type', 'requester']]
-            # 將時間截短只顯示時分
             df_pending['time'] = df_pending['time'].str[11:16]
             df_pending.columns = ['時間', '床位', '任務', '發布者']
             st.dataframe(df_pending, use_container_width=True, hide_index=True)
@@ -265,6 +254,43 @@ def whiteboard_interface():
         else:
             st.info("目前無正在執行的任務。")
 
+# --- 後台紀錄介面 (需密碼) ---
+def backend_interface():
+    st.header("📂 後台紀錄管理")
+    
+    # 檢查是否已通過後台密碼驗證
+    if not st.session_state.backend_auth:
+        st.info("⚠️ 進入後台紀錄需要系統管理員權限，請輸入密碼解鎖。")
+        pwd = st.text_input("請輸入後台密碼", type="password")
+        if st.button("解鎖後台"):
+            if pwd == "6155":
+                st.session_state.backend_auth = True
+                st.rerun()
+            else:
+                st.error("密碼錯誤，請重新輸入！")
+    else:
+        # 已解鎖狀態
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.markdown("檢視所有歷史派發紀錄與完成時間。")
+        with col2:
+            if st.button("🔒 鎖定並離開後台", use_container_width=True):
+                st.session_state.backend_auth = False
+                st.rerun()
+                
+        tasks = load_data()
+        if tasks:
+            df = pd.DataFrame(tasks)
+            # 整理與重新命名欄位以便閱讀
+            df = df[['time', 'bed', 'task_type', 'details', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
+            df.columns = ['發布時間', '床位', '任務類型', '詳細內容', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
+            # 將最新的紀錄排在最上面
+            df = df.sort_values(by='發布時間', ascending=False)
+            
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.write("目前系統尚無任何派發紀錄。")
+
 # --- 主程式邏輯 ---
 def main():
     if not st.session_state.is_logged_in:
@@ -278,9 +304,11 @@ def main():
                 st.session_state.is_logged_in = False
                 st.session_state.nickname = ""
                 st.session_state.role = ""
+                st.session_state.backend_auth = False # 登出時一併鎖定後台
                 st.rerun()
         
-        tab_operate, tab_whiteboard = st.tabs(["📟 任務派發/執行", "📊 動態白板"])
+        # 使用 Tabs 分開三大區塊
+        tab_operate, tab_whiteboard, tab_backend = st.tabs(["📟 任務派發/執行", "📊 動態白板", "📂 後台紀錄"])
         
         with tab_operate:
             if st.session_state.role == "醫師/護理師":
@@ -290,6 +318,9 @@ def main():
                 
         with tab_whiteboard:
             whiteboard_interface()
+            
+        with tab_backend:
+            backend_interface()
 
 if __name__ == "__main__":
     main()
