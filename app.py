@@ -53,10 +53,20 @@ if "nickname" not in st.session_state:
     st.session_state.nickname = ""
 if "role" not in st.session_state:
     st.session_state.role = ""
-if "backend_auth" not in st.session_state:
-    st.session_state.backend_auth = False 
 if "success_message" not in st.session_state:
     st.session_state.success_message = "" 
+
+# --- 共用：要求輸入綽號的 UI 元件 ---
+def require_nickname():
+    # 讓使用者在介面頂端輸入綽號
+    nickname_input = st.text_input("👤 請先輸入您的綽號 (輸入後即可開始操作)：", value=st.session_state.nickname, placeholder="例如：小明")
+    if nickname_input != st.session_state.nickname:
+        st.session_state.nickname = nickname_input
+        st.rerun()
+        
+    if not st.session_state.nickname.strip():
+        st.warning("⚠️ 必須填寫綽號才能繼續進行後續動作喔！")
+        st.stop() # 停止渲染下方的介面，直到輸入綽號為止
 
 # --- 護理師專用：備物確認彈出視窗 ---
 @st.dialog("⚠️ 護理師派發確認")
@@ -80,7 +90,6 @@ def confirm_nurse_task(new_task):
 @st.dialog("📝 執行任務回報與結案")
 def np_feedback_dialog(task_id):
     tasks = load_data()
-    # 找出當前要回報的任務
     task = next((t for t in tasks if t['id'] == task_id), None)
     
     if not task:
@@ -93,7 +102,6 @@ def np_feedback_dialog(task_id):
     
     feedback_text = ""
     
-    # 根據不同處置動態顯示回報表單
     if task['task_type'] == "Suture (縫合)":
         col_s1, col_s2 = st.columns(2)
         with col_s1:
@@ -120,7 +128,6 @@ def np_feedback_dialog(task_id):
         feedback_text = f"鼻孔: {nostril} | 材質: {material} | 固定刻度: {fix_cm} cm"
         
     else:
-        # 會診或藥物開立等其他項目，提供自由填寫的備註欄
         feedback_text = st.text_input("處理結果備註 (選填)", placeholder="例如：已聯絡骨科醫師、點滴已開立...")
         if not feedback_text:
             feedback_text = "已處理完畢"
@@ -138,7 +145,10 @@ def np_feedback_dialog(task_id):
 
 # --- 醫師/護理師共用介面 (派發任務) ---
 def assigner_interface():
-    st.header(f"👋 {st.session_state.role} {st.session_state.nickname}，您好！")
+    st.header(f"👋 {st.session_state.role} 介面")
+    
+    # 呼叫綽號輸入檢查
+    require_nickname()
     
     if st.session_state.success_message:
         st.success(st.session_state.success_message)
@@ -185,7 +195,8 @@ def assigner_interface():
         details = f"目的: {ng_type}"
         
     elif task_type == "Suture (縫合)":
-        s_part = st.selectbox("部位", ["四肢", "頭部", "臉部"])
+        # 更新縫合部位選項
+        s_part = st.selectbox("部位", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"])
         s_line = st.selectbox("縫線選擇", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0"])
         details = f"部位: {s_part} | 縫線: {s_line}"
         
@@ -217,7 +228,7 @@ def assigner_interface():
                 "handler": "",
                 "start_time": "",
                 "complete_time": "",
-                "feedback": "" # 新增回報欄位
+                "feedback": "" 
             }
             
             if st.session_state.role == "護理師":
@@ -231,7 +242,10 @@ def assigner_interface():
 
 # --- 專科護理師介面 (接收與處理任務) ---
 def np_interface():
-    st.header(f"👩‍⚕️ 專科護理師 {st.session_state.nickname}，您好！")
+    st.header(f"👩‍⚕️ 專科護理師介面")
+    
+    # 呼叫綽號輸入檢查
+    require_nickname()
     
     if st.session_state.success_message:
         st.success(st.session_state.success_message)
@@ -255,7 +269,6 @@ def np_interface():
                 overdue_text = " ⚠️ (已超時)" if is_overdue else ""
                 
                 with st.container(border=True):
-                    # 顯眼標示派發者
                     st.markdown(f"**{status_icon} {t['time'][11:16]} | {t['bed']} - {t['task_type']}**{overdue_text}")
                     st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
                     st.write(f"📝 內容：{t['details']}")
@@ -281,7 +294,6 @@ def np_interface():
                     st.write(f"📝 內容：{t['details']}")
                     st.write(f"⏱️ 接單時間：{t['start_time'][11:16]}")
                     
-                    # 點擊完成後，呼叫回報視窗
                     if st.button(f"✅ 標記為完成 (填寫回報)", key=f"done_btn_{t['id']}", use_container_width=True, type="primary"):
                         np_feedback_dialog(t['id'])
         else:
@@ -327,50 +339,28 @@ def whiteboard_interface():
         else:
             st.info("目前無正在執行的任務。")
 
-# --- 後台紀錄介面 (需密碼) ---
+# --- 後台紀錄介面 (無密碼版) ---
 def backend_interface():
     st.header("📂 後台紀錄管理")
+    st.markdown("檢視所有歷史派發與**專師執行回報紀錄**。")
     
-    if not st.session_state.backend_auth:
-        st.info("⚠️ 進入後台紀錄需要系統管理員權限，請輸入密碼解鎖。")
-        pwd = st.text_input("請輸入後台密碼", type="password")
-        if st.button("解鎖後台"):
-            if pwd == "6155":
-                st.session_state.backend_auth = True
-                st.rerun()
-            else:
-                st.error("密碼錯誤，請重新輸入！")
-    else:
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            st.markdown("檢視所有歷史派發與**專師執行回報紀錄**。")
-        with col2:
-            if st.button("🔒 鎖定並離開後台", use_container_width=True):
-                st.session_state.backend_auth = False
-                st.rerun()
-                
-        tasks = load_data()
-        if tasks:
-            df = pd.DataFrame(tasks)
-            # 將 feedback 欄位加入後台顯示 (如果舊資料沒有 feedback 欄位，給予預設值空字串)
-            if 'feedback' not in df.columns:
-                df['feedback'] = ""
-                
-            df = df[['time', 'bed', 'task_type', 'details', 'feedback', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
-            df.columns = ['發布時間', '床位', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
-            df = df.sort_values(by='發布時間', ascending=False)
+    tasks = load_data()
+    if tasks:
+        df = pd.DataFrame(tasks)
+        if 'feedback' not in df.columns:
+            df['feedback'] = ""
             
-            st.dataframe(df, use_container_width=True, hide_index=True)
-        else:
-            st.write("目前系統尚無任何派發紀錄。")
+        df = df[['time', 'bed', 'task_type', 'details', 'feedback', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
+        df.columns = ['發布時間', '床位', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
+        df = df.sort_values(by='發布時間', ascending=False)
+        
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.write("目前系統尚無任何派發紀錄。")
 
 # --- 主程式邏輯 ---
 def main():
     with st.sidebar:
-        st.markdown("### 👤 使用者資訊")
-        st.text_input("輸入您的綽號", key="nickname", placeholder="必填，例如：小明")
-        
-        st.markdown("---")
         st.markdown("### 📍 系統選單")
         page = st.radio("前往頁面", [
             "👨‍⚕️ 醫師 (派發任務)", 
@@ -383,26 +373,18 @@ def main():
         st.markdown("---")
         st.write("🔄 狀態：每 5 分鐘自動同步")
 
+    # 根據左側選單進入對應頁面，設定角色並執行介面
     if page == "👨‍⚕️ 醫師 (派發任務)":
-        if not st.session_state.nickname.strip():
-            st.warning("⚠️ 請先於左側欄「輸入您的綽號」才能開始派發任務喔！")
-        else:
-            st.session_state.role = "醫師"
-            assigner_interface()
+        st.session_state.role = "醫師"
+        assigner_interface()
             
     elif page == "👩‍⚕️ 護理師 (派發任務)":
-        if not st.session_state.nickname.strip():
-            st.warning("⚠️ 請先於左側欄「輸入您的綽號」才能開始派發任務喔！")
-        else:
-            st.session_state.role = "護理師"
-            assigner_interface()
+        st.session_state.role = "護理師"
+        assigner_interface()
             
     elif page == "🧑‍⚕️ 專科護理師 (接收任務)":
-        if not st.session_state.nickname.strip():
-            st.warning("⚠️ 請先於左側欄「輸入您的綽號」才能開始接單喔！")
-        else:
-            st.session_state.role = "專科護理師"
-            np_interface()
+        st.session_state.role = "專科護理師"
+        np_interface()
             
     elif page == "📊 動態白板":
         whiteboard_interface()
