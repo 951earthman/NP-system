@@ -56,16 +56,16 @@ if "role" not in st.session_state:
 if "is_logged_in" not in st.session_state:
     st.session_state.is_logged_in = False
 if "backend_auth" not in st.session_state:
-    st.session_state.backend_auth = False # 後台專屬認證狀態
+    st.session_state.backend_auth = False 
 
 # --- 登入介面 ---
 def login_page():
     st.title("🏥 急診專師協助派發系統")
-    st.markdown("請輸入您的綽號與身分以進入系統。")
+    st.markdown("請輸入您的綽號與預設身分以進入系統（登入後可於左側欄自由切換）。")
     
     with st.form("login_form"):
         nickname_input = st.text_input("輸入綽號 (必填)")
-        role_input = st.selectbox("選擇身分", ["請選擇...", "醫師/護理師 (派發任務)", "專科護理師 (執行任務)"])
+        role_input = st.selectbox("選擇預設身分", ["請選擇...", "醫師/護理師 (派發任務)", "專科護理師 (執行任務)"])
         submit_button = st.form_submit_button("登入")
         
         if submit_button:
@@ -258,7 +258,6 @@ def whiteboard_interface():
 def backend_interface():
     st.header("📂 後台紀錄管理")
     
-    # 檢查是否已通過後台密碼驗證
     if not st.session_state.backend_auth:
         st.info("⚠️ 進入後台紀錄需要系統管理員權限，請輸入密碼解鎖。")
         pwd = st.text_input("請輸入後台密碼", type="password")
@@ -269,7 +268,6 @@ def backend_interface():
             else:
                 st.error("密碼錯誤，請重新輸入！")
     else:
-        # 已解鎖狀態
         col1, col2 = st.columns([4, 1])
         with col1:
             st.markdown("檢視所有歷史派發紀錄與完成時間。")
@@ -281,10 +279,8 @@ def backend_interface():
         tasks = load_data()
         if tasks:
             df = pd.DataFrame(tasks)
-            # 整理與重新命名欄位以便閱讀
             df = df[['time', 'bed', 'task_type', 'details', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
             df.columns = ['發布時間', '床位', '任務類型', '詳細內容', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
-            # 將最新的紀錄排在最上面
             df = df.sort_values(by='發布時間', ascending=False)
             
             st.dataframe(df, use_container_width=True, hide_index=True)
@@ -296,30 +292,44 @@ def main():
     if not st.session_state.is_logged_in:
         login_page()
     else:
+        # 左側欄 (Sidebar) 設計
         with st.sidebar:
-            st.write(f"👤 登入身分：**{st.session_state.nickname}**")
-            st.write(f"🏷️ 權限：{st.session_state.role}")
-            st.write(f"🔄 每 5 分鐘自動同步")
-            if st.button("登出"):
+            st.write(f"👤 登入者：**{st.session_state.nickname}**")
+            
+            st.markdown("---")
+            st.markdown("### 🔄 角色切換")
+            # 依據目前的 Session State 設定選項的預設值
+            role_index = 0 if st.session_state.role == "醫師/護理師" else 1
+            new_role = st.radio("當前操作身分", ["醫師/護理師", "專科護理師"], index=role_index, label_visibility="collapsed")
+            
+            # 若選取不同的角色，則更新 state 並重整畫面
+            if new_role != st.session_state.role:
+                st.session_state.role = new_role
+                st.rerun()
+            
+            st.markdown("---")
+            st.markdown("### 📍 系統選單")
+            # 頁面導航
+            page = st.radio("前往頁面", ["📟 任務操作 (派發/執行)", "📊 動態白板", "📂 後台紀錄"], label_visibility="collapsed")
+            
+            st.markdown("---")
+            st.write("🔄 狀態：每 5 分鐘自動同步")
+            if st.button("登出", use_container_width=True):
                 st.session_state.is_logged_in = False
                 st.session_state.nickname = ""
                 st.session_state.role = ""
-                st.session_state.backend_auth = False # 登出時一併鎖定後台
+                st.session_state.backend_auth = False
                 st.rerun()
         
-        # 使用 Tabs 分開三大區塊
-        tab_operate, tab_whiteboard, tab_backend = st.tabs(["📟 任務派發/執行", "📊 動態白板", "📂 後台紀錄"])
-        
-        with tab_operate:
+        # 根據側邊欄的選單，顯示對應的主畫面內容
+        if page == "📟 任務操作 (派發/執行)":
             if st.session_state.role == "醫師/護理師":
                 assigner_interface()
             else:
                 np_interface()
-                
-        with tab_whiteboard:
+        elif page == "📊 動態白板":
             whiteboard_interface()
-            
-        with tab_backend:
+        elif page == "📂 後台紀錄":
             backend_interface()
 
 if __name__ == "__main__":
