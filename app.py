@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import json
 import os
@@ -12,6 +13,11 @@ st.set_page_config(page_title="急診專師協助派發系統", page_icon="🏥"
 count = st_autorefresh(interval=300000, limit=None, key="data_sync_refresh")
 
 DATA_FILE = "task_data.json"
+
+# --- 台灣時間轉換函數 ---
+def get_tw_time():
+    # 確保無論伺服器在哪，都統一使用 UTC+8 (台灣時間)
+    return datetime.utcnow() + timedelta(hours=8)
 
 # --- 全新分層床位資料庫 ---
 BED_DATA_COMPLEX = {
@@ -54,7 +60,34 @@ if "nickname" not in st.session_state:
 if "role" not in st.session_state:
     st.session_state.role = ""
 if "success_message" not in st.session_state:
-    st.session_state.success_message = "" 
+    st.session_state.success_message = ""
+if "known_task_ids" not in st.session_state:
+    # 紀錄目前已知的任務ID，用來比對是否有新任務產生
+    st.session_state.known_task_ids = set([t['id'] for t in load_data()])
+
+# --- 新任務偵測與警報音系統 ---
+def check_for_new_alerts():
+    tasks = load_data()
+    current_ids = set([t['id'] for t in tasks])
+    
+    # 計算差集，找出新出現的任務 ID
+    new_ids = current_ids - st.session_state.known_task_ids
+    
+    if new_ids:
+        # 跳出右下角浮動提示窗
+        st.toast("🚨 系統有新的協助任務派發！請查看列表。", icon="🔔")
+        # 隱藏式注入 HTML 播放提示音 (使用 Google 免費短音效庫)
+        components.html(
+            """
+            <audio autoplay>
+                <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+            </audio>
+            """,
+            width=0, height=0
+        )
+        
+    # 更新已知的任務ID清單
+    st.session_state.known_task_ids = current_ids
 
 # --- 共用：要求輸入綽號的 UI 元件 ---
 def require_nickname():
@@ -136,7 +169,7 @@ def np_feedback_dialog(task_id):
         for i in range(len(tasks)):
             if tasks[i]['id'] == task_id:
                 tasks[i]['status'] = '已完成'
-                tasks[i]['complete_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                tasks[i]['complete_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
                 tasks[i]['feedback'] = feedback_text
         save_data(tasks)
         st.session_state.success_message = "✅ 任務結案與回報完成！"
@@ -150,7 +183,9 @@ def clear_records_dialog():
     
     if st.button("🚨 確認清除", type="primary", use_container_width=True):
         if pwd == "6155":
-            save_data([]) # 儲存空的 list 覆蓋現有資料
+            save_data([]) 
+            # 清除紀錄後，也要重置已知的任務 ID，以免報錯
+            st.session_state.known_task_ids = set()
             st.session_state.success_message = "✅ 系統內所有紀錄已成功清除！"
             st.rerun()
         else:
@@ -228,8 +263,8 @@ def assigner_interface():
             st.warning("請填寫會診科別！")
         else:
             new_task = {
-                "id": str(datetime.now().timestamp()),
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "id": str(get_tw_time().timestamp()),
+                "time": get_tw_time().strftime("%Y-%m-%d %H:%M:%S"), # 改為台灣時間
                 "bed": final_bed,
                 "task_type": task_type,
                 "details": details,
@@ -273,7 +308,7 @@ def np_interface():
             for t in pending_tasks:
                 task_time = datetime.strptime(t['time'], "%Y-%m-%d %H:%M:%S")
                 overdue_time = task_time + timedelta(hours=1)
-                is_overdue = datetime.now() > overdue_time
+                is_overdue = get_tw_time() > overdue_time # 使用台灣時間判定
                 
                 status_icon = "🔴" if is_overdue else "🟡"
                 overdue_text = " ⚠️ (已超時)" if is_overdue else ""
@@ -288,7 +323,7 @@ def np_interface():
                             if tasks[i]['id'] == t['id']:
                                 tasks[i]['status'] = '執行中'
                                 tasks[i]['handler'] = st.session_state.nickname
-                                tasks[i]['start_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
                         save_data(tasks)
                         st.rerun()
         else:
@@ -353,21 +388,18 @@ def whiteboard_interface():
 def backend_interface():
     st.header("📂 後台紀錄管理")
     
-    # 接收來自清除紀錄彈窗的成功訊息
     if st.session_state.success_message:
         st.success(st.session_state.success_message)
         st.session_state.success_message = ""
     
     tasks = load_data()
     
-    # 建立頂部控制列：文字說明、匯出按鈕、清除按鈕
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         st.markdown("檢視所有歷史派發與**專師執行回報紀錄**。")
         
     with col2:
         if tasks:
-            # 轉換為 DataFrame 並排序
             df = pd.DataFrame(tasks)
             if 'feedback' not in df.columns:
                 df['feedback'] = ""
@@ -375,11 +407,9 @@ def backend_interface():
             df.columns = ['發布時間', '床位', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
             df = df.sort_values(by='發布時間', ascending=False)
             
-            # 使用 utf-8-sig 編碼轉為 CSV，讓 Excel 開啟不亂碼
             csv_data = df.to_csv(index=False, encoding='utf-8-sig')
             
-            # 建立下載按鈕
-            current_date = datetime.now().strftime("%Y%m%d")
+            current_date = get_tw_time().strftime("%Y%m%d")
             st.download_button(
                 label="📥 匯出 Excel (CSV格式)",
                 data=csv_data,
@@ -394,7 +424,6 @@ def backend_interface():
             
     st.markdown("---")
 
-    # 顯示資料表
     if tasks:
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
@@ -402,6 +431,9 @@ def backend_interface():
 
 # --- 主程式邏輯 ---
 def main():
+    # 每次重整頁面時，全域偵測是否有新任務，觸發警示
+    check_for_new_alerts()
+    
     with st.sidebar:
         st.markdown("### 📍 系統選單")
         page = st.radio("前往頁面", [
