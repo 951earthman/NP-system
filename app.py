@@ -6,7 +6,7 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
 # 設定頁面
-st.set_page_config(page_title="專師/醫師協助派發系統", page_icon="🏥", layout="wide")
+st.set_page_config(page_title="專師協助派發系統", page_icon="🏥", layout="wide")
 
 # 設定五分鐘 (300000 毫秒) 自動重新整理一次，達到同步效果
 count = st_autorefresh(interval=300000, limit=None, key="data_sync_refresh")
@@ -37,12 +37,12 @@ if "is_logged_in" not in st.session_state:
 
 # --- 登入介面 ---
 def login_page():
-    st.title("🏥 臨床協助派發系統 - 登入")
+    st.title("🏥 專師協助派發系統 - 登入")
     st.markdown("請輸入您的綽號與身分以進入系統。")
     
     with st.form("login_form"):
         nickname_input = st.text_input("輸入綽號 (必填)")
-        role_input = st.selectbox("選擇身分", ["請選擇...", "護理師", "專科護理師/醫師"])
+        role_input = st.selectbox("選擇身分", ["請選擇...", "醫師/護理師 (派發任務)", "專科護理師 (執行任務)"])
         submit_button = st.form_submit_button("登入")
         
         if submit_button:
@@ -52,35 +52,13 @@ def login_page():
                 st.error("請選擇身分！")
             else:
                 st.session_state.nickname = nickname_input.strip()
-                st.session_state.role = role_input
+                st.session_state.role = "醫師/護理師" if "派發" in role_input else "專科護理師"
                 st.session_state.is_logged_in = True
                 st.rerun()
 
-# --- 護理師介面 (派發任務) ---
-def nurse_interface():
-    st.header(f"👋 護理師 {st.session_state.nickname}，您好！")
-    st.subheader("新增協助請求")
-    
-    with st.form("new_task_form"):
-        # 床位選擇 (依急診常用床位格式，可自行擴充)
-        bed_options = [f"急診 {i} 床" for i in range(1, 21)] + ["留觀區", "急救室"]
-        bed = st.selectbox("選擇床位", bed_options)
-        
-        task_type = st.selectbox("協助項目", ["請選擇...", "on Foley", "on NG", "Suture (縫合)", "會診", "藥物開立"])
-        
-        # 預留子項目變數
-        sub_details = {}
-        
-        # 根據選項動態顯示子項目 (Streamlit form 內無法動態隱藏/顯示，所以這裡改用 form 外的 UI 或將選項全部列出但標示條件)
-        # 注意：為了達到根據選項變動 UI，我們不能把動態選項包在同一個 st.form 裡面。
-        # 因此這部分的實作我們改用一般按鈕，而非 st.form。
-        
-        st.info("請於下方確認並送出詳細需求")
-        submit = st.form_submit_button("確認派發") # 這邊先放一個假的，等下外面再做真正的送出邏輯
-        
-# 重新設計護理師介面 (不使用 form 以支援動態選單)
-def nurse_interface_dynamic():
-    st.header(f"👋 護理師 {st.session_state.nickname}，您好！")
+# --- 醫師/護理師介面 (派發任務) ---
+def assigner_interface():
+    st.header(f"👋 {st.session_state.role} {st.session_state.nickname}，您好！")
     st.markdown("---")
     
     col1, col2 = st.columns([1, 2])
@@ -92,6 +70,7 @@ def nurse_interface_dynamic():
     with col2:
         st.subheader("2. 填寫詳細設定")
         details = ""
+        
         if task_type == "on Foley":
             f_type = st.radio("Foley 種類", ["一般", "矽質"], horizontal=True)
             f_sample = st.checkbox("需留取檢體")
@@ -114,7 +93,7 @@ def nurse_interface_dynamic():
             med_type = st.radio("藥物類別", ["續開", "大量點滴"], horizontal=True)
             details = f"類別: {med_type}"
 
-        if st.button("🚀 送出請求", use_container_width=True):
+        if st.button("🚀 送出請求給專師", use_container_width=True):
             if task_type == "會診" and not consult_dept:
                 st.warning("請填寫會診科別！")
             else:
@@ -126,16 +105,17 @@ def nurse_interface_dynamic():
                     "task_type": task_type,
                     "details": details,
                     "requester": st.session_state.nickname,
+                    "requester_role": st.session_state.role,
                     "status": "待處理",
                     "handler": ""
                 }
                 tasks.append(new_task)
                 save_data(tasks)
-                st.success(f"已成功送出 {bed} 的 {task_type} 請求！")
+                st.success(f"已成功送出 {bed} 的 {task_type} 請求給專師！")
 
-# --- 專師/醫師介面 (接收與處理任務) ---
-def doctor_interface():
-    st.header(f"👨‍⚕️ {st.session_state.nickname} (專師/醫師)，您好！")
+# --- 專科護理師介面 (接收與處理任務) ---
+def np_interface():
+    st.header(f"👩‍⚕️ 專科護理師 {st.session_state.nickname}，您好！")
     
     tasks = load_data()
     pending_tasks = [t for t in tasks if t['status'] == '待處理']
@@ -143,10 +123,19 @@ def doctor_interface():
     
     st.subheader(f"🔔 待處理任務 ({len(pending_tasks)} 筆)")
     if pending_tasks:
-        for idx, t in enumerate(pending_tasks):
-            with st.expander(f"🔴 {t['time'][11:16]} | {t['bed']} - {t['task_type']}", expanded=True):
+        for t in pending_tasks:
+            # 判斷是否超過一小時 (3600秒)
+            task_time = datetime.strptime(t['time'], "%Y-%m-%d %H:%M:%S")
+            time_diff = (datetime.now() - task_time).total_seconds()
+            is_overdue = time_diff > 3600
+            
+            # 超時加上警告標示
+            status_icon = "🔴" if is_overdue else "🟡"
+            overdue_text = " ⚠️ (已超時)" if is_overdue else ""
+            
+            with st.expander(f"{status_icon} {t['time'][11:16]} | {t['bed']} - {t['task_type']}{overdue_text}", expanded=True):
                 st.write(f"**詳細內容：** {t['details']}")
-                st.write(f"**發出請求者：** {t['requester']}")
+                st.write(f"**發出請求者：** {t['requester']} ({t['requester_role']})")
                 
                 if st.button(f"✅ 標記為完成", key=f"done_{t['id']}"):
                     # 更新狀態
@@ -163,10 +152,9 @@ def doctor_interface():
     st.markdown("---")
     st.subheader(f"✅ 今日已完成紀錄 ({len(completed_tasks)} 筆)")
     if completed_tasks:
-        # 將完成的任務轉為 DataFrame 方便顯示
         df = pd.DataFrame(completed_tasks)
         df = df[['time', 'bed', 'task_type', 'details', 'requester', 'handler', 'complete_time']]
-        df.columns = ['請求時間', '床位', '任務類型', '詳細內容', '護理師', '處理者', '完成時間']
+        df.columns = ['請求時間', '床位', '任務類型', '詳細內容', '發送者', '處理專師', '完成時間']
         st.dataframe(df, use_container_width=True)
 
 # --- 主程式邏輯 ---
@@ -186,10 +174,10 @@ def main():
                 st.rerun()
         
         # 根據身分顯示對應介面
-        if st.session_state.role == "護理師":
-            nurse_interface_dynamic()
+        if st.session_state.role == "醫師/護理師":
+            assigner_interface()
         else:
-            doctor_interface()
+            np_interface()
 
 if __name__ == "__main__":
     main()
