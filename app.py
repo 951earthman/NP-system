@@ -53,35 +53,12 @@ if "nickname" not in st.session_state:
     st.session_state.nickname = ""
 if "role" not in st.session_state:
     st.session_state.role = ""
-if "is_logged_in" not in st.session_state:
-    st.session_state.is_logged_in = False
 if "backend_auth" not in st.session_state:
     st.session_state.backend_auth = False 
 
-# --- 登入介面 ---
-def login_page():
-    st.title("🏥 急診專師協助派發系統")
-    st.markdown("請輸入您的綽號與預設身分以進入系統（登入後可於左側欄自由切換）。")
-    
-    with st.form("login_form"):
-        nickname_input = st.text_input("輸入綽號 (必填)")
-        role_input = st.selectbox("選擇預設身分", ["請選擇...", "醫師/護理師 (派發任務)", "專科護理師 (執行任務)"])
-        submit_button = st.form_submit_button("登入")
-        
-        if submit_button:
-            if not nickname_input.strip():
-                st.error("請輸入綽號！")
-            elif role_input == "請選擇...":
-                st.error("請選擇身分！")
-            else:
-                st.session_state.nickname = nickname_input.strip()
-                st.session_state.role = "醫師/護理師" if "派發" in role_input else "專科護理師"
-                st.session_state.is_logged_in = True
-                st.rerun()
-
 # --- 醫師/護理師介面 (派發任務) ---
 def assigner_interface():
-    st.header(f"👋 {st.session_state.role} {st.session_state.nickname}，您好！")
+    st.header(f"👋 醫師/護理師 {st.session_state.nickname}，您好！")
     st.markdown("---")
     
     st.subheader("📍 步驟 1：選擇位置")
@@ -173,6 +150,7 @@ def np_interface():
         if pending_tasks:
             for t in pending_tasks:
                 task_time = datetime.strptime(t['time'], "%Y-%m-%d %H:%M:%S")
+                # 任務時間往後推一小時為超時門檻
                 overdue_time = task_time + timedelta(hours=1)
                 is_overdue = datetime.now() > overdue_time
                 
@@ -289,48 +267,47 @@ def backend_interface():
 
 # --- 主程式邏輯 ---
 def main():
-    if not st.session_state.is_logged_in:
-        login_page()
-    else:
-        # 左側欄 (Sidebar) 設計
-        with st.sidebar:
-            st.write(f"👤 登入者：**{st.session_state.nickname}**")
-            
-            st.markdown("---")
-            st.markdown("### 🔄 角色切換")
-            # 依據目前的 Session State 設定選項的預設值
-            role_index = 0 if st.session_state.role == "醫師/護理師" else 1
-            new_role = st.radio("當前操作身分", ["醫師/護理師", "專科護理師"], index=role_index, label_visibility="collapsed")
-            
-            # 若選取不同的角色，則更新 state 並重整畫面
-            if new_role != st.session_state.role:
-                st.session_state.role = new_role
-                st.rerun()
-            
-            st.markdown("---")
-            st.markdown("### 📍 系統選單")
-            # 頁面導航
-            page = st.radio("前往頁面", ["📟 任務操作 (派發/執行)", "📊 動態白板", "📂 後台紀錄"], label_visibility="collapsed")
-            
-            st.markdown("---")
-            st.write("🔄 狀態：每 5 分鐘自動同步")
-            if st.button("登出", use_container_width=True):
-                st.session_state.is_logged_in = False
-                st.session_state.nickname = ""
-                st.session_state.role = ""
-                st.session_state.backend_auth = False
-                st.rerun()
+    # 左側欄 (Sidebar) 設計 - 直接作為全系統的導航中樞
+    with st.sidebar:
+        st.markdown("### 👤 使用者資訊")
+        # key="nickname" 會自動將輸入框的值綁定到 st.session_state.nickname
+        st.text_input("輸入您的綽號", key="nickname", placeholder="必填，例如：小明")
         
-        # 根據側邊欄的選單，顯示對應的主畫面內容
-        if page == "📟 任務操作 (派發/執行)":
-            if st.session_state.role == "醫師/護理師":
-                assigner_interface()
-            else:
-                np_interface()
-        elif page == "📊 動態白板":
-            whiteboard_interface()
-        elif page == "📂 後台紀錄":
-            backend_interface()
+        st.markdown("---")
+        st.markdown("### 📍 系統選單")
+        # 直接用 radio 按鈕選擇要去的頁面
+        page = st.radio("前往頁面", [
+            "📟 醫師/護理師 (派發任務)", 
+            "👩‍⚕️ 專科護理師 (接收任務)", 
+            "📊 動態白板", 
+            "📂 後台紀錄"
+        ], label_visibility="collapsed")
+        
+        st.markdown("---")
+        st.write("🔄 狀態：每 5 分鐘自動同步")
+
+    # 根據左側欄選擇的頁面，渲染右側主畫面
+    if page == "📟 醫師/護理師 (派發任務)":
+        if not st.session_state.nickname.strip():
+            st.warning("⚠️ 請先於左側欄「輸入您的綽號」才能開始派發任務喔！")
+        else:
+            st.session_state.role = "醫師/護理師"
+            assigner_interface()
+            
+    elif page == "👩‍⚕️ 專科護理師 (接收任務)":
+        if not st.session_state.nickname.strip():
+            st.warning("⚠️ 請先於左側欄「輸入您的綽號」才能開始接單喔！")
+        else:
+            st.session_state.role = "專科護理師"
+            np_interface()
+            
+    elif page == "📊 動態白板":
+        # 白板區不強制需要綽號即可觀看
+        whiteboard_interface()
+        
+    elif page == "📂 後台紀錄":
+        # 後台紀錄區由密碼 (6155) 控管
+        backend_interface()
 
 if __name__ == "__main__":
     main()
