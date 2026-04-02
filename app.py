@@ -16,7 +16,6 @@ DATA_FILE = "task_data.json"
 
 # --- 台灣時間轉換函數 ---
 def get_tw_time():
-    # 確保無論伺服器在哪，都統一使用 UTC+8 (台灣時間)
     return datetime.utcnow() + timedelta(hours=8)
 
 # --- 全新分層床位資料庫 ---
@@ -62,21 +61,16 @@ if "role" not in st.session_state:
 if "success_message" not in st.session_state:
     st.session_state.success_message = ""
 if "known_task_ids" not in st.session_state:
-    # 紀錄目前已知的任務ID，用來比對是否有新任務產生
     st.session_state.known_task_ids = set([t['id'] for t in load_data()])
 
 # --- 新任務偵測與警報音系統 ---
 def check_for_new_alerts():
     tasks = load_data()
     current_ids = set([t['id'] for t in tasks])
-    
-    # 計算差集，找出新出現的任務 ID
     new_ids = current_ids - st.session_state.known_task_ids
     
     if new_ids:
-        # 跳出右下角浮動提示窗
         st.toast("🚨 系統有新的協助任務派發！請查看列表。", icon="🔔")
-        # 隱藏式注入 HTML 播放提示音 (使用 Google 免費短音效庫)
         components.html(
             """
             <audio autoplay>
@@ -85,8 +79,6 @@ def check_for_new_alerts():
             """,
             width=0, height=0
         )
-        
-    # 更新已知的任務ID清單
     st.session_state.known_task_ids = current_ids
 
 # --- 共用：要求輸入綽號的 UI 元件 ---
@@ -128,7 +120,7 @@ def np_feedback_dialog(task_id):
         st.error("找不到該任務資料！")
         return
 
-    st.write(f"**床位：** {task['bed']} | **任務：** {task['task_type']}")
+    st.write(f"**位置/病患：** {task['bed']} | **任務：** {task['task_type']}")
     st.write(f"**派發者：** {task['requester']} ({task['requester_role']})")
     st.markdown("---")
     
@@ -137,7 +129,13 @@ def np_feedback_dialog(task_id):
     if task['task_type'] == "Suture (縫合)":
         col_s1, col_s2 = st.columns(2)
         with col_s1:
-            thread = st.selectbox("縫線選擇", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "其他"])
+            thread_choice = st.selectbox("實際使用縫線", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "其他 (自行輸入)"])
+            if thread_choice == "其他 (自行輸入)":
+                thread = st.text_input("請輸入自訂縫線", placeholder="例如: Prolene 4-0")
+                if not thread:
+                    thread = "未填寫"
+            else:
+                thread = thread_choice
         with col_s2:
             stitches = st.number_input("縫合針數", min_value=1, max_value=50, value=3, step=1)
         feedback_text = f"縫線: {thread} | 針數: {stitches} 針"
@@ -184,7 +182,6 @@ def clear_records_dialog():
     if st.button("🚨 確認清除", type="primary", use_container_width=True):
         if pwd == "6155":
             save_data([]) 
-            # 清除紀錄後，也要重置已知的任務 ID，以免報錯
             st.session_state.known_task_ids = set()
             st.session_state.success_message = "✅ 系統內所有紀錄已成功清除！"
             st.rerun()
@@ -204,10 +201,14 @@ def assigner_interface():
     st.markdown("---")
     
     st.subheader("📍 步驟 1：選擇位置")
-    area = st.radio("【 1. 先選大區域 】", list(BED_DATA_COMPLEX.keys()), horizontal=True)
+    
+    # 增加「病患無床位」選項
+    area_options = list(BED_DATA_COMPLEX.keys()) + ["病患無床位"]
+    area = st.radio("【 1. 先選大區域 】", area_options, horizontal=True)
     
     final_bed = ""
     bed_note = ""
+    patient_name = ""
     
     if area in ["留觀(OBS)", "診間"]:
         sub_area = st.radio(f"【 2. 選擇 {area} 區域 】", list(BED_DATA_COMPLEX[area].keys()), horizontal=True)
@@ -218,6 +219,14 @@ def assigner_interface():
         bed_num = st.radio("【 2. 選擇床號 】", BED_DATA_COMPLEX[area]["兒科床位"], horizontal=True)
         final_bed = f"兒科 {bed_num}床"
         
+    elif area == "病患無床位":
+        # 顯示姓名輸入框，讓醫護人員貼上姓名
+        patient_name = st.text_input("【 2. 填寫病患姓名 (必填) 】", placeholder="請在此貼上或輸入病患姓名...")
+        if patient_name:
+            final_bed = f"無床位 (病患: {patient_name})"
+        else:
+            final_bed = "無床位"
+            
     else:
         bed_note = st.text_input(f"【 2. {area} 備註 (選填) 】", placeholder="例如：等待推床、暫放走廊...")
         final_bed = area
@@ -243,8 +252,22 @@ def assigner_interface():
         
     elif task_type == "Suture (縫合)":
         s_part = st.selectbox("部位", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"])
-        s_line = st.selectbox("縫線選擇", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0"])
-        details = f"部位: {s_part} | 縫線: {s_line}"
+        
+        # 增加「由專科護理師自行評估」與「其他 (自行輸入)」
+        s_line_choice = st.selectbox("縫線選擇", [
+            "Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", 
+            "由專科護理師自行評估", 
+            "其他 (自行輸入)"
+        ])
+        
+        # 如果選其他，跳出輸入框讓醫師自己打
+        if s_line_choice == "其他 (自行輸入)":
+            custom_line = st.text_input("請輸入所需縫線", placeholder="例如: Prolene 4-0, Vicryl...")
+            actual_line = custom_line if custom_line else "未填寫"
+        else:
+            actual_line = s_line_choice
+            
+        details = f"部位: {s_part} | 縫線: {actual_line}"
         
     elif task_type == "會診":
         consult_dept = st.text_input("請輸入會診科別 (例如：骨科, 外科)")
@@ -259,12 +282,15 @@ def assigner_interface():
     btn_text = "🚀 準備派發任務 (需確認備物)" if st.session_state.role == "護理師" else "🚀 確認無誤，送出請求給專師"
     
     if st.button(btn_text, use_container_width=True, type="primary"):
-        if task_type == "會診" and not consult_dept:
-            st.warning("請填寫會診科別！")
+        # 增加無床位時的防呆機制
+        if area == "病患無床位" and not patient_name.strip():
+            st.warning("⚠️ 選擇無床位時，請務必填寫或貼上病患姓名！")
+        elif task_type == "會診" and not consult_dept:
+            st.warning("⚠️ 請填寫會診科別！")
         else:
             new_task = {
                 "id": str(get_tw_time().timestamp()),
-                "time": get_tw_time().strftime("%Y-%m-%d %H:%M:%S"), # 改為台灣時間
+                "time": get_tw_time().strftime("%Y-%m-%d %H:%M:%S"), 
                 "bed": final_bed,
                 "task_type": task_type,
                 "details": details,
@@ -308,7 +334,7 @@ def np_interface():
             for t in pending_tasks:
                 task_time = datetime.strptime(t['time'], "%Y-%m-%d %H:%M:%S")
                 overdue_time = task_time + timedelta(hours=1)
-                is_overdue = get_tw_time() > overdue_time # 使用台灣時間判定
+                is_overdue = get_tw_time() > overdue_time
                 
                 status_icon = "🔴" if is_overdue else "🟡"
                 overdue_text = " ⚠️ (已超時)" if is_overdue else ""
@@ -369,7 +395,7 @@ def whiteboard_interface():
         if pending:
             df_pending = pd.DataFrame(pending)[['time', 'bed', 'task_type', 'requester']]
             df_pending['time'] = df_pending['time'].str[11:16]
-            df_pending.columns = ['時間', '床位', '任務', '發布者']
+            df_pending.columns = ['時間', '位置/病患', '任務', '發布者']
             st.dataframe(df_pending, use_container_width=True, hide_index=True)
         else:
             st.success("目前無積壓任務！")
@@ -379,7 +405,7 @@ def whiteboard_interface():
         if in_progress:
             df_prog = pd.DataFrame(in_progress)[['handler', 'bed', 'task_type', 'start_time']]
             df_prog['start_time'] = df_prog['start_time'].str[11:16]
-            df_prog.columns = ['專師', '床位', '任務', '接單時間']
+            df_prog.columns = ['專師', '位置/病患', '任務', '接單時間']
             st.dataframe(df_prog, use_container_width=True, hide_index=True)
         else:
             st.info("目前無正在執行的任務。")
@@ -404,7 +430,7 @@ def backend_interface():
             if 'feedback' not in df.columns:
                 df['feedback'] = ""
             df = df[['time', 'bed', 'task_type', 'details', 'feedback', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
-            df.columns = ['發布時間', '床位', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
+            df.columns = ['發布時間', '位置/病患', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
             df = df.sort_values(by='發布時間', ascending=False)
             
             csv_data = df.to_csv(index=False, encoding='utf-8-sig')
@@ -431,7 +457,6 @@ def backend_interface():
 
 # --- 主程式邏輯 ---
 def main():
-    # 每次重整頁面時，全域偵測是否有新任務，觸發警示
     check_for_new_alerts()
     
     with st.sidebar:
