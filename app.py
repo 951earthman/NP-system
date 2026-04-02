@@ -239,14 +239,13 @@ def assigner_interface():
     st.markdown("---")
     st.subheader("📋 步驟 2：選擇協助項目與優先級")
     
-    # 新增優先級選項
     priority = st.radio("優先級別", ["🟢 一般", "🔴 緊急"], horizontal=True)
     task_type = st.radio("協助項目", ["on Foley", "on NG", "Suture (縫合)", "會診", "藥物開立"], horizontal=True)
     
     st.markdown("##### 填寫詳細設定")
     details = ""
-    med_details = "" # 預設藥物變數
-    consult_dept = "" # 預設會診變數
+    med_details = "" 
+    consult_dept = "" 
     
     if task_type == "on Foley":
         f_type = st.radio("Foley 種類", ["一般", "矽質"], horizontal=True)
@@ -254,8 +253,14 @@ def assigner_interface():
         details = f"種類: {f_type} | 檢體: {'是' if f_sample else '否'}"
         
     elif task_type == "on NG":
-        ng_type = st.radio("NG 目的", ["Re-on", "Decompression"], horizontal=True)
-        details = f"目的: {ng_type}"
+        # NG 增加 IRRI 與 自行輸入 選項
+        ng_type_choice = st.radio("NG 目的", ["Re-on", "Decompression", "IRRI (沖洗)", "其他 (自行輸入)"], horizontal=True)
+        if ng_type_choice == "其他 (自行輸入)":
+            custom_ng = st.text_input("請輸入自訂 NG 目的/處置", placeholder="例如: 檢查反抽物...")
+            actual_ng = custom_ng if custom_ng else "未填寫"
+        else:
+            actual_ng = ng_type_choice
+        details = f"目的: {actual_ng}"
         
     elif task_type == "Suture (縫合)":
         s_part = st.selectbox("部位", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"])
@@ -278,7 +283,6 @@ def assigner_interface():
         details = f"科別: {consult_dept}"
         
     elif task_type == "藥物開立":
-        # 藥物開立改為純文字輸入
         med_details = st.text_input("請輸入藥物名稱或處置說明 (必填)", placeholder="例如：Keto 1 amp IV stat")
         details = f"說明: {med_details}"
 
@@ -287,7 +291,6 @@ def assigner_interface():
     btn_text = "🚀 準備派發任務 (需確認備物)" if st.session_state.role == "護理師" else "🚀 確認無誤，送出請求給專師"
     
     if st.button(btn_text, use_container_width=True, type="primary"):
-        # 各種防呆機制
         if area == "病患無床位" and not patient_name.strip():
             st.warning("⚠️ 選擇無床位時，請務必填寫或貼上病患姓名！")
         elif task_type == "會診" and not consult_dept.strip():
@@ -298,7 +301,7 @@ def assigner_interface():
             new_task = {
                 "id": str(get_tw_time().timestamp()),
                 "time": get_tw_time().strftime("%Y-%m-%d %H:%M:%S"), 
-                "priority": priority, # 寫入優先級
+                "priority": priority, 
                 "bed": final_bed,
                 "task_type": task_type,
                 "details": details,
@@ -332,9 +335,7 @@ def np_interface():
     
     tasks = load_data()
     
-    # 待接單任務：依時間排序（確保緊急與舊任務在上方）
     pending_tasks = [t for t in tasks if t['status'] == '待處理']
-    # 執行中任務
     in_progress_tasks = [t for t in tasks if t['status'] == '執行中' and t['handler'] == st.session_state.nickname]
     
     col1, col2 = st.columns(2)
@@ -350,16 +351,11 @@ def np_interface():
                 status_icon = "🔴" if is_overdue else "🟡"
                 overdue_text = " ⚠️ (已超時)" if is_overdue else ""
                 
-                # 若為緊急任務，加入顯著外框樣式
-                box_color = "#FFEBEB" if "緊急" in t['priority'] else None
-                
                 with st.container(border=True):
-                    # 顯示優先級
                     st.markdown(f"**{t['priority']}** | **{status_icon} {t['time'][11:16]} | {t['bed']} - {t['task_type']}**{overdue_text}")
                     st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
                     st.write(f"📝 內容：{t['details']}")
                     
-                    # 將接單與醫師已完成按鈕並列
                     btn_col1, btn_col2 = st.columns(2)
                     with btn_col1:
                         if st.button(f"👉 點我接單", key=f"take_{t['id']}", use_container_width=True):
