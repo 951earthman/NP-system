@@ -15,7 +15,7 @@ count = st_autorefresh(interval=300000, limit=None, key="data_sync_refresh")
 
 DATA_FILE = "task_data.json"
 USERS_FILE = "users_data.json"
-ONLINE_FILE = "online_users.json" # 新增：用來記錄人員上線狀態
+ONLINE_FILE = "online_users.json"
 
 # --- 台灣時間轉換函數 ---
 def get_tw_time():
@@ -158,6 +158,35 @@ def confirm_nurse_task(new_task):
         if st.button("❌ 尚未完成，返回修改", use_container_width=True):
             st.rerun() 
 
+# --- 護理師專用：聯絡洗腎確認彈出視窗 ---
+@st.dialog("⚠️ 聯絡洗腎 - 派發確認")
+def confirm_nurse_hd_task(new_task):
+    st.write(f"即將派發：**{new_task['priority']}** | **{new_task['bed']}** 的 **聯絡洗腎** 請求。")
+    consent = st.radio("請問是否已完成洗腎同意書？", ["是", "否"], horizontal=True)
+    reason = ""
+    if consent == "否":
+        reason = st.text_input("請填寫未完成原因 (必填)", placeholder="例如：家屬尚未抵達...")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🚀 確認派發任務", type="primary", use_container_width=True):
+            if consent == "否" and not reason.strip():
+                st.error("⚠️ 選擇「否」時，必須填寫未完成原因！")
+            else:
+                if consent == "否":
+                    new_task['details'] += f" | 同意書: 未完成 ({reason})"
+                else:
+                    new_task['details'] += f" | 同意書: 已完成"
+                tasks = load_data()
+                tasks.append(new_task)
+                save_data(tasks)
+                st.session_state.success_message = f"✅ 已成功送出 【 {new_task['bed']} 】 的 【聯絡洗腎】 請求！"
+                st.rerun()
+    with col2:
+        if st.button("❌ 返回修改", use_container_width=True):
+            st.rerun()
+
 # --- 專科護理師專用：任務回報彈出視窗 ---
 @st.dialog("📝 執行任務回報與結案")
 def np_feedback_dialog(task_id, is_doc_assisted=False):
@@ -209,7 +238,7 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
             feedback_text = f"鼻孔: {nostril} | 材質: {material} | 固定刻度: {fix_cm} cm"
             
         else:
-            feedback_text = st.text_input("處理結果備註 (選填)", placeholder="例如：已聯絡骨科醫師、點滴已開立...")
+            feedback_text = st.text_input("處理結果備註 (選填)", placeholder="例如：已處理完畢、已聯絡科別...")
             if not feedback_text: feedback_text = "已處理完畢"
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -220,6 +249,8 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
                 tasks[i]['complete_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
                 if is_doc_assisted:
                     tasks[i]['handler'] = f"{st.session_state.nickname} (註記醫師完成)"
+                else:
+                    tasks[i]['handler'] = st.session_state.nickname
                 tasks[i]['feedback'] = feedback_text
         save_data(tasks)
         st.session_state.success_message = "✅ 任務結案與回報完成！"
@@ -230,7 +261,6 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
 def delete_selected_dialog(ids_to_delete):
     st.error(f"您即將刪除選取的 {len(ids_to_delete)} 筆紀錄！此動作無法復原。")
     pwd = st.text_input("請輸入系統密碼以確認", type="password", key="pwd_del_sel")
-    
     if st.button("🚨 確認刪除選取項目", type="primary", use_container_width=True):
         if pwd == "6155":
             tasks = load_data()
@@ -242,11 +272,10 @@ def delete_selected_dialog(ids_to_delete):
         else:
             st.error("密碼錯誤，拒絕刪除！")
 
-@st.dialog("💥 警告：清除全部紀錄 (清空資料庫)")
+@st.dialog("💥 警告：清除全部紀錄")
 def clear_records_dialog():
     st.error("您即將清除系統中的「所有」任務紀錄！此動作無法復原。")
     pwd = st.text_input("請輸入系統密碼以確認", type="password", key="pwd_clear_all")
-    
     if st.button("🚨 確認清空資料庫", type="primary", use_container_width=True):
         if pwd == "6155":
             save_data([]) 
@@ -259,25 +288,18 @@ def clear_records_dialog():
 # --- 登入介面 ---
 def login_interface():
     st.header("🔑 系統登入")
-    st.markdown("歡迎使用急診專師協助派發系統，請先登入以解鎖功能。")
-    
     users_list = load_users()
-    
     with st.container(border=True):
         user_choice = st.selectbox("選擇曾使用的綽號", ["(新增綽號...)"] + users_list)
         if user_choice == "(新增綽號...)":
             nickname_input = st.text_input("輸入新綽號 (必填)")
         else:
             nickname_input = user_choice
-            
         role_input = st.selectbox("選擇身分", ["請選擇...", "護理師", "醫師", "專科護理師"])
-        
         if st.button("🚀 登入系統", use_container_width=True, type="primary"):
             final_nickname = nickname_input.strip()
-            if not final_nickname:
-                st.error("請輸入或選擇綽號！")
-            elif role_input == "請選擇...":
-                st.error("請選擇您的身分！")
+            if not final_nickname: st.error("請輸入或選擇綽號！")
+            elif role_input == "請選擇...": st.error("請選擇您的身分！")
             else:
                 save_user(final_nickname)
                 st.session_state.nickname = final_nickname
@@ -288,427 +310,237 @@ def login_interface():
 # --- 醫師/護理師共用介面 (派發任務) ---
 def assigner_interface():
     st.header(f"👋 {st.session_state.role} 派發介面")
-    
     if st.session_state.success_message:
         st.success(st.session_state.success_message)
         st.session_state.success_message = "" 
-        
     st.markdown("---")
-    st.subheader("📍 步驟 1：選擇位置")
     
+    st.subheader("📍 步驟 1：選擇位置")
     area_options = list(BED_DATA_COMPLEX.keys()) + ["病患無床位"]
     area = st.radio("【 1. 先選大區域 】", area_options, horizontal=True)
-    
-    final_bed = ""
-    bed_note = ""
-    patient_name = ""
-    
+    final_bed = ""; bed_note = ""; patient_name = ""
     if area in ["留觀(OBS)", "診間"]:
         sub_area = st.radio(f"【 2. 選擇 {area} 區域 】", list(BED_DATA_COMPLEX[area].keys()), horizontal=True)
         bed_num = st.radio(f"【 3. 選擇 {sub_area} 床號 】", BED_DATA_COMPLEX[area][sub_area], horizontal=True)
         final_bed = f"{sub_area} {bed_num}床"
-        
     elif area == "兒科":
         bed_num = st.radio("【 2. 選擇床號 】", BED_DATA_COMPLEX[area]["兒科床位"], horizontal=True)
         final_bed = f"兒科 {bed_num}床"
-        
     elif area == "病患無床位":
         patient_name = st.text_input("【 2. 填寫病患姓名 (必填) 】", placeholder="請在此貼上或輸入病患姓名...")
-        if patient_name:
-            final_bed = f"無床位 (病患: {patient_name})"
-        else:
-            final_bed = "無床位"
-            
+        if patient_name: final_bed = f"無床位 (病患: {patient_name})"
+        else: final_bed = "無床位"
     else:
-        bed_note = st.text_input(f"【 2. {area} 備註 (選填) 】", placeholder="例如：等待推床、暫放走廊...")
+        bed_note = st.text_input(f"【 2. {area} 備註 (選填) 】", placeholder="例如：等待推床...")
         final_bed = area
-        if bed_note:
-            final_bed += f" ({bed_note})"
+        if bed_note: final_bed += f" ({bed_note})"
 
     st.markdown("---")
     st.subheader("📋 步驟 2：選擇協助項目與優先級")
-    
     priority = st.radio("優先級別", ["🟢 一般", "🔴 緊急"], horizontal=True)
-    task_type = st.radio("協助項目", ["on Foley", "on NG", "Suture (縫合)", "會診", "藥物開立"], horizontal=True)
+    task_type = st.radio("協助項目", ["on Foley", "on NG", "Suture (縫合)", "會診", "藥物開立", "聯絡洗腎", "檢體採集"], horizontal=True)
     
-    details = ""
-    med_details = "" 
-    consult_dept = "" 
+    details = ""; med_details = ""; consult_dept = ""; hd_days = []; spec_type = ""; wound_sub = ""
     
     if task_type == "on Foley":
         f_type = st.radio("Foley 種類", ["一般", "矽質"], horizontal=True)
         f_sample = st.checkbox("需留取檢體")
         details = f"種類: {f_type} | 檢體: {'是' if f_sample else '否'}"
-        
     elif task_type == "on NG":
         ng_type_choice = st.radio("NG 目的", ["Re-on", "Decompression", "IRRI (沖洗)", "其他 (自行輸入)"], horizontal=True)
         if ng_type_choice == "其他 (自行輸入)":
-            custom_ng = st.text_input("請輸入自訂 NG 目的/處置", placeholder="例如: 檢查反抽物...")
+            custom_ng = st.text_input("請輸入自訂目的")
             actual_ng = custom_ng if custom_ng else "未填寫"
-        else:
-            actual_ng = ng_type_choice
+        else: actual_ng = ng_type_choice
         details = f"目的: {actual_ng}"
-        
     elif task_type == "Suture (縫合)":
         s_part = st.selectbox("部位", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"])
-        s_line_choice = st.selectbox("縫線選擇", [
-            "Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", 
-            "由專科護理師自行評估", 
-            "其他 (自行輸入)"
-        ])
-        
+        s_line_choice = st.selectbox("縫線選擇", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "由專科護理師自行評估", "其他 (自行輸入)"])
         if s_line_choice == "其他 (自行輸入)":
-            custom_line = st.text_input("請輸入所需縫線", placeholder="例如: Prolene 4-0, Vicryl...")
-            actual_line = custom_line if custom_line else "未填寫"
-        else:
-            actual_line = s_line_choice
-            
+            custom_line = st.text_input("自訂縫線"); actual_line = custom_line if custom_line else "未填寫"
+        else: actual_line = s_line_choice
         details = f"部位: {s_part} | 縫線: {actual_line}"
-        
     elif task_type == "會診":
-        consult_dept = st.text_input("請輸入會診科別 (必填)", placeholder="例如：骨科, 外科")
-        details = f"科別: {consult_dept}"
-        
+        consult_dept = st.text_input("會診科別"); details = f"科別: {consult_dept}"
     elif task_type == "藥物開立":
-        med_details = st.text_input("請輸入藥物名稱或處置說明 (必填)", placeholder="例如：Keto 1 amp IV stat")
-        details = f"說明: {med_details}"
+        med_details = st.text_input("藥物/說明"); details = f"說明: {med_details}"
+    elif task_type == "聯絡洗腎":
+        if st.session_state.role == "醫師": st.info("💡 醫師提醒：請務必完成「洗腎同意書」！")
+        hd_days = st.multiselect("平常洗腎日", ["週一", "週二", "週三", "週四", "週五", "週六", "週日"])
+        hd_location = st.radio("地點", ["本院", "外院", "不明"], horizontal=True)
+        details = f"洗腎日: {','.join(hd_days)} | 地點: {hd_location}"
+    elif task_type == "檢體採集":
+        spec_type = st.radio("採集內容", ["鼻口腔黏膜", "傷口"], horizontal=True)
+        if spec_type == "傷口":
+            wound_sub = st.radio("傷口培養類別", ["嗜氧", "厭氧", "其他 (自行備註)"], horizontal=True)
+            details = f"內容: 傷口 ({wound_sub})"
+        else:
+            details = f"內容: 鼻口腔黏膜"
+            # 專屬護理師的採檢前置作業提醒
+            if st.session_state.role == "護理師":
+                st.info("💡 護理師提醒：請印好條碼貼上採檢棒，並放於待採檢區。")
 
     st.markdown("<br>", unsafe_allow_html=True)
-    btn_text = "🚀 準備派發任務 (需確認備物)" if st.session_state.role == "護理師" else "🚀 確認無誤，送出請求給專師"
+    if st.session_state.role == "護理師":
+        if task_type in ["會診", "藥物開立"]: btn_text = "🚀 確認直接送出"
+        elif task_type == "聯絡洗腎": btn_text = "🚀 需確認同意書"
+        else: btn_text = "🚀 需確認備物"
+    else: btn_text = "🚀 確認無誤送出"
     
     if st.button(btn_text, use_container_width=True, type="primary"):
         if check_pii(patient_name, details, bed_note, consult_dept, med_details):
-            st.error("⚠️ 資安警告：偵測到疑似身分證字號！系統已攔截此派發。請勿在系統內填寫病患真實身分證字號以保護個資。")
-            st.stop()
-            
-        if area == "病患無床位" and not patient_name.strip():
-            st.warning("⚠️ 選擇無床位時，請務必填寫或貼上病患姓名！")
-        elif task_type == "會診" and not consult_dept.strip():
-            st.warning("⚠️ 請填寫會診科別！")
-        elif task_type == "藥物開立" and not med_details.strip():
-            st.warning("⚠️ 請填寫需開立的藥物名稱或說明！")
+            st.error("⚠️ 資安警告：偵測到疑似身分證字號！已攔截派發。"); st.stop()
+        if area == "病患無床位" and not patient_name.strip(): st.warning("⚠️ 請填寫病患姓名！")
+        elif task_type == "聯絡洗腎" and not hd_days: st.warning("⚠️ 請勾選洗腎日！")
+        elif task_type == "會診" and not consult_dept: st.warning("⚠️ 請填寫科別！")
+        elif task_type == "藥物開立" and not med_details: st.warning("⚠️ 請填寫藥物說明！")
         else:
-            new_task = {
-                "id": str(get_tw_time().timestamp()),
-                "time": get_tw_time().strftime("%Y-%m-%d %H:%M:%S"), 
-                "priority": priority, 
-                "bed": final_bed,
-                "task_type": task_type,
-                "details": details,
-                "requester": st.session_state.nickname,
-                "requester_role": st.session_state.role,
-                "status": "待處理",
-                "handler": "",
-                "start_time": "",
-                "complete_time": "",
-                "feedback": "" 
-            }
-            
+            new_task = {"id": str(get_tw_time().timestamp()), "time": get_tw_time().strftime("%Y-%m-%d %H:%M:%S"), "priority": priority, "bed": final_bed, "task_type": task_type, "details": details, "requester": st.session_state.nickname, "requester_role": st.session_state.role, "status": "待處理", "handler": "", "start_time": "", "complete_time": "", "feedback": ""}
             if st.session_state.role == "護理師":
-                confirm_nurse_task(new_task)
+                if task_type in ["會診", "藥物開立"]:
+                    tasks = load_data(); tasks.append(new_task); save_data(tasks); st.rerun()
+                elif task_type == "聯絡洗腎": confirm_nurse_hd_task(new_task)
+                else: confirm_nurse_task(new_task)
             else:
-                tasks = load_data()
-                tasks.append(new_task)
-                save_data(tasks)
-                st.session_state.success_message = f"✅ 已成功送出 【 {final_bed} 】 的 【 {task_type} 】 請求！"
-                st.rerun()
+                tasks = load_data(); tasks.append(new_task); save_data(tasks); st.rerun()
 
 # --- 專科護理師介面 (接收與處理任務) ---
 def np_interface():
     st.header(f"👩‍⚕️ 專科護理師接收介面")
-    
-    if st.session_state.success_message:
-        st.success(st.session_state.success_message)
-        st.session_state.success_message = ""
-    
+    check_for_new_alerts()
     tasks = load_data()
-    pending_tasks = [t for t in tasks if t['status'] == '待處理']
-    in_progress_tasks = [t for t in tasks if t['status'] == '執行中' and t['handler'] == st.session_state.nickname]
+    pending = [t for t in tasks if t['status'] == '待處理']
+    in_prog = [t for t in tasks if t['status'] == '執行中' and t['handler'] == st.session_state.nickname]
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader(f"🔔 待接單任務 ({len(pending_tasks)} 筆)")
-        if pending_tasks:
-            for t in pending_tasks:
-                task_time = datetime.strptime(t['time'], "%Y-%m-%d %H:%M:%S")
-                overdue_time = task_time + timedelta(hours=1)
-                is_overdue = get_tw_time() > overdue_time
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader(f"🔔 待接單 ({len(pending)})")
+        for t in pending:
+            with st.container(border=True):
+                st.markdown(f"**{t['priority']}** | **{t['time'][11:16]} | {t['bed']} - {t['task_type']}**")
+                st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
+                st.write(f"📝 內容：{t['details']}")
                 
-                status_icon = "🔴" if is_overdue else "🟡"
-                overdue_text = " ⚠️ (已超時)" if is_overdue else ""
+                # 鼻口腔黏膜保護警告
+                if t['task_type'] == "檢體採集" and "鼻口腔黏膜" in t['details']:
+                    st.warning("🛡️ **防護提醒：** 執行鼻口腔黏膜採集，請務必配戴**護目鏡與口罩**，保護自身安全！")
                 
-                with st.container(border=True):
-                    st.markdown(f"**{t['priority']}** | **{status_icon} {t['time'][11:16]} | {t['bed']} - {t['task_type']}**{overdue_text}")
-                    st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
-                    st.write(f"📝 內容：{t['details']}")
-                    
-                    btn_col1, btn_col2 = st.columns(2)
-                    with btn_col1:
-                        if st.button(f"👉 點我接單", key=f"take_{t['id']}", use_container_width=True):
-                            for i in range(len(tasks)):
-                                if tasks[i]['id'] == t['id']:
-                                    tasks[i]['status'] = '執行中'
-                                    tasks[i]['handler'] = st.session_state.nickname
-                                    tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
-                            save_data(tasks)
-                            st.rerun()
-                    with btn_col2:
-                        if st.button(f"👨‍⚕️ 醫師已協助完成", key=f"doc_done_{t['id']}", use_container_width=True):
-                            np_feedback_dialog(t['id'], is_doc_assisted=True)
-        else:
-            st.info("目前沒有待處理的任務。")
-
-    with col2:
-        st.subheader(f"🏃‍♂️ 我的執行中任務 ({len(in_progress_tasks)} 筆)")
-        if in_progress_tasks:
-            for t in in_progress_tasks:
-                with st.container(border=True):
-                    st.markdown(f"**{t['priority']}** | **🔵 {t['bed']} - {t['task_type']}**")
-                    st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
-                    st.write(f"📝 內容：{t['details']}")
-                    st.write(f"⏱️ 接單時間：{t['start_time'][11:16]}")
-                    
-                    if st.button(f"✅ 標記為完成 (填寫回報)", key=f"done_btn_{t['id']}", use_container_width=True, type="primary"):
-                        np_feedback_dialog(t['id'], is_doc_assisted=False)
-        else:
-            st.info("您目前沒有正在執行的任務。")
+                b1, b2 = st.columns(2)
+                with b1:
+                    if st.button(f"👉 點我接單", key=f"tk_{t['id']}", use_container_width=True):
+                        for i in range(len(tasks)):
+                            if tasks[i]['id'] == t['id']:
+                                tasks[i]['status'] = '執行中'; tasks[i]['handler'] = st.session_state.nickname; tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
+                        save_data(tasks); st.rerun()
+                with b2:
+                    if st.button(f"👨‍⚕️ 醫師已完成", key=f"dd_{t['id']}", use_container_width=True):
+                        np_feedback_dialog(t['id'], is_doc_assisted=True)
+    with c2:
+        st.subheader(f"🏃 我的執行中 ({len(in_prog)})")
+        for t in in_prog:
+            with st.container(border=True):
+                st.markdown(f"**{t['priority']}** | **🔵 {t['bed']} - {t['task_type']}**")
+                st.write(f"📝 內容：{t['details']}")
+                if t['task_type'] == "檢體採集" and "鼻口腔黏膜" in t['details']:
+                    st.warning("🛡️ **防護提醒：** 請配戴護目鏡與口罩！")
+                if st.button(f"✅ 標記完成", key=f"dn_{t['id']}", use_container_width=True, type="primary"):
+                    np_feedback_dialog(t['id'], is_doc_assisted=False)
 
 # --- 動態白板介面 ---
 def whiteboard_interface():
     st.header("📊 系統動態白板")
-    st.markdown("快速掌握急診現場協助派遣狀況（每5分鐘自動刷新）")
-    
-    tasks = load_data()
-    pending = [t for t in tasks if t['status'] == '待處理']
-    in_progress = [t for t in tasks if t['status'] == '執行中']
-    
-    # 從 online_users.json 抓取最新上線專師狀態 (超時 15 分鐘判定離線)
-    online_users = load_online_users()
-    active_nps = []
-    now = get_tw_time()
+    tasks = load_data(); pending = [t for t in tasks if t['status'] == '待處理']; in_prog = [t for t in tasks if t['status'] == '執行中']
+    online_users = load_online_users(); active_nps = []; now = get_tw_time()
     for name, info in online_users.items():
         if info['role'] == "專科護理師":
             last_seen = datetime.strptime(info['last_seen'], "%Y-%m-%d %H:%M:%S")
-            if (now - last_seen).total_seconds() < 900: # 15分鐘
-                active_nps.append(name)
-                
-    busy_nps = list(set([t['handler'] for t in in_progress if t['handler']]))
+            if (now - last_seen).total_seconds() < 900: active_nps.append(name)
+    busy_nps = list(set([t['handler'] for t in in_prog if t['handler']]))
     idle_nps = [np for np in active_nps if np not in busy_nps]
     
     col1, col2, col3 = st.columns(3)
     col1.metric("🔴 待處理任務", len(pending), "未接單", delta_color="inverse")
-    col2.metric("🔵 執行中任務", len(in_progress), "處理中", delta_color="off")
-    col3.metric("👨‍⚕️ 值班專師", len(active_nps), "上線中", delta_color="normal")
-    
+    col2.metric("🔵 執行中任務", len(in_prog), "處理中", delta_color="off")
+    col3.metric("👨‍⚕️ 值班專師", len(active_nps), "上線中")
     if active_nps:
         col3.caption(f"🏃 **執行中:** {', '.join(busy_nps) if busy_nps else '無'}")
         col3.caption(f"☕ **待命中:** {', '.join(idle_nps) if idle_nps else '無'}")
-    else:
-        col3.caption("📍 目前無專師上線")
     
     st.markdown("---")
-    
-    w_col1, w_col2 = st.columns(2)
-    
-    with w_col1:
+    w1, w2 = st.columns(2)
+    with w1:
         st.subheader("🚨 未接單清單")
         if pending:
-            df_pending = pd.DataFrame(pending)[['time', 'priority', 'bed', 'task_type', 'requester']]
-            df_pending['time'] = df_pending['time'].str[11:16]
-            df_pending.columns = ['時間', '優先級', '位置/病患', '任務', '發布者']
-            st.dataframe(df_pending, use_container_width=True, hide_index=True)
-        else:
-            st.success("目前無積壓任務！")
-            
-    with w_col2:
+            dfp = pd.DataFrame(pending)[['time', 'priority', 'bed', 'task_type', 'requester']]
+            dfp['time'] = dfp['time'].str[11:16]; dfp.columns = ['時間', '優先級', '位置/病患', '任務', '發布者']
+            st.dataframe(dfp, use_container_width=True, hide_index=True)
+    with w2:
         st.subheader("⚡ 專師執行動態")
-        if in_progress:
-            df_prog = pd.DataFrame(in_progress)[['handler', 'priority', 'bed', 'task_type', 'start_time']]
-            df_prog['start_time'] = df_prog['start_time'].str[11:16]
-            df_prog.columns = ['專師', '優先級', '位置/病患', '任務', '接單時間']
-            st.dataframe(df_prog, use_container_width=True, hide_index=True)
-        else:
-            st.info("目前無正在執行的任務。")
+        if in_prog:
+            dfg = pd.DataFrame(in_prog)[['handler', 'priority', 'bed', 'task_type', 'start_time']]
+            dfg['start_time'] = dfg['start_time'].str[11:16]; dfg.columns = ['專師', '優先級', '位置/病患', '任務', '接單時間']
+            st.dataframe(dfg, use_container_width=True, hide_index=True)
 
 # --- 後台紀錄介面 ---
 def backend_interface():
-    st.header("📂 後台紀錄與批次管理")
-    
-    if st.session_state.success_message:
-        st.success(st.session_state.success_message)
-        st.session_state.success_message = ""
-    
+    st.header("📂 後台紀錄與管理")
     tasks = load_data()
-    if not tasks:
-        st.info("目前系統尚無任何派發紀錄。")
-        return
-
+    if not tasks: st.info("目前無紀錄。"); return
     df = pd.DataFrame(tasks)
-    if 'feedback' not in df.columns: df['feedback'] = ""
-    if 'priority' not in df.columns: df['priority'] = "🟢 一般"
+    df.insert(0, "選取", False)
+    st.markdown("### 📋 檢視與排序")
+    sort_by = st.selectbox("🔃 排序依據", ["發布時間 (最新到最舊)", "發布時間 (最舊到最新)", "處理專師", "任務類型"])
+    if "最新" in sort_by: df = df.sort_values(by='time', ascending=False)
+    elif "最舊" in sort_by: df = df.sort_values(by='time', ascending=True)
+    elif "專師" in sort_by: df = df.sort_values(by='handler')
+
+    edited_df = st.data_editor(df, column_config={"選取": st.column_config.CheckboxColumn("選取", default=False), "id": None}, hide_index=True, use_container_width=True)
+    sel_rows = edited_df[edited_df["選取"] == True]
     
-    df = df[['id', 'time', 'priority', 'bed', 'task_type', 'details', 'feedback', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
-    df.columns = ['任務ID', '發布時間', '優先級', '位置/病患', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
-
-    st.markdown("---")
-    st.markdown("### 📋 檢視與篩選")
-    col_sort, col_select = st.columns([2, 1])
-    
-    with col_sort:
-        sort_by = st.selectbox("🔃 排序依據", [
-            "發布時間 (最新到最舊)",
-            "發布時間 (最舊到最新)",
-            "處理專師 (A-Z)",
-            "任務類型",
-            "優先級",
-            "處理狀態"
-        ])
-
-    with col_select:
-        st.write("") 
-        st.write("") 
-        select_all = st.checkbox("✅ 全選所有紀錄")
-
-    if sort_by == "發布時間 (最新到最舊)":
-        df = df.sort_values(by='發布時間', ascending=False)
-    elif sort_by == "發布時間 (最舊到最新)":
-        df = df.sort_values(by='發布時間', ascending=True)
-    elif sort_by == "處理專師 (A-Z)":
-        df = df.sort_values(by=['處理專師', '發布時間'], ascending=[True, False])
-    elif sort_by == "任務類型":
-        df = df.sort_values(by=['任務類型', '發布時間'], ascending=[True, False])
-    elif sort_by == "優先級":
-        df = df.sort_values(by=['優先級', '發布時間'], ascending=[False, False])
-    elif sort_by == "處理狀態":
-        df = df.sort_values(by=['狀態', '發布時間'], ascending=[True, False])
-
-    df.insert(0, "選取", select_all)
-
-    edited_df = st.data_editor(
-        df,
-        column_config={
-            "選取": st.column_config.CheckboxColumn("選取", default=False),
-            "任務ID": None 
-        },
-        disabled=df.columns.drop("選取").tolist(), 
-        hide_index=True,
-        use_container_width=True
-    )
-
-    selected_rows = edited_df[edited_df["選取"] == True]
-
-    st.markdown("---")
-    st.markdown("### 🛠️ 選取項目操作")
-    col_btn1, col_btn2, col_btn3 = st.columns(3)
-
-    with col_btn1:
-        if not selected_rows.empty:
-            csv_data = selected_rows.drop(columns=["選取", "任務ID"]).to_csv(index=False, encoding='utf-8-sig')
-            st.download_button(
-                label=f"📥 匯出選取的 {len(selected_rows)} 筆紀錄",
-                data=csv_data,
-                file_name=f"ER_Tasks_Selected_{get_tw_time().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        else:
-            st.button("📥 請先勾選資料以匯出", disabled=True, use_container_width=True)
-
-    with col_btn2:
-        if st.button(f"🗑️ 刪除選取的 {len(selected_rows)} 筆紀錄", disabled=selected_rows.empty, use_container_width=True):
-            delete_selected_dialog(selected_rows['任務ID'].tolist())
-
-    with col_btn3:
-        if st.button("🚨 清除全部紀錄 (清空資料庫)", use_container_width=True, type="primary"):
-            clear_records_dialog()
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if not sel_rows.empty:
+            csv = sel_rows.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(label=f"📥 匯出選取 ({len(sel_rows)})", data=csv, file_name=f"ER_Tasks_{get_tw_time().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
+    with c2:
+        if st.button(f"🗑️ 刪除選取 ({len(sel_rows)})", disabled=sel_rows.empty, use_container_width=True):
+            delete_selected_dialog(sel_rows['id'].tolist())
+    with c3:
+        if st.button("🚨 清除全部", use_container_width=True, type="primary"): clear_records_dialog()
 
 # --- 主程式邏輯 ---
 def main():
-    check_for_new_alerts()
-    
-    # 只要網頁開著，定時更新該使用者的上線狀態
-    if st.session_state.is_logged_in:
-        update_online_status(st.session_state.nickname, st.session_state.role)
-    
+    if st.session_state.is_logged_in: update_online_status(st.session_state.nickname, st.session_state.role)
     if not st.session_state.is_logged_in:
         with st.sidebar:
             st.markdown("### 📍 系統導航")
             page = st.radio("前往頁面", ["🔑 系統登入", "📊 動態白板 (免登入)"], label_visibility="collapsed")
             st.markdown("---")
-            st.caption("© 2026 護理師 吳智弘 版權所有")
-            st.caption("請遵守相關資安與隱私規範，勿輸入真實病患個資。")
-            
-        if page == "🔑 系統登入":
-            login_interface()
-        elif page == "📊 動態白板 (免登入)":
-            whiteboard_interface()
-            
+            st.caption("© 2026 護理師 吳智弘 版權所有"); st.caption("請遵守個資法，勿填真實身分證字號。")
+        if page == "🔑 系統登入": login_interface()
+        else: whiteboard_interface()
     else:
         with st.sidebar:
-            st.markdown(f"### 👤 登入者：**{st.session_state.nickname}**")
-            st.markdown(f"**身分：** {st.session_state.role}")
-            
+            st.markdown(f"### 👤 **{st.session_state.nickname}** ({st.session_state.role})")
             if st.button("🚪 下班登出", use_container_width=True):
-                # 清除線上狀態紀錄
-                remove_online_status(st.session_state.nickname)
-                
-                # 自動退回尚未完成的任務
-                tasks = load_data()
+                remove_online_status(st.session_state.nickname); tasks = load_data()
                 for t in tasks:
                     if t['status'] == '執行中' and t['handler'] == st.session_state.nickname:
-                        t['status'] = '待處理'
-                        t['handler'] = ''
-                        t['start_time'] = ''
-                save_data(tasks)
-                
-                st.session_state.is_logged_in = False
-                st.session_state.nickname = ""
-                st.session_state.role = ""
-                st.rerun()
-                
-            st.markdown(
-                """
-                <a href="." target="_blank" style="
-                    display: block; 
-                    text-align: center; 
-                    padding: 0.45rem; 
-                    margin-top: 0.5rem;
-                    background-color: transparent; 
-                    color: inherit; 
-                    border-radius: 0.5rem; 
-                    border: 1px solid rgba(128, 128, 128, 0.5);
-                    text-decoration: none; 
-                ">➕ 開啟新身分 (新分頁)</a>
-                """, 
-                unsafe_allow_html=True
-            )
-                
+                        t['status'] = '待處理'; t['handler'] = ''; t['start_time'] = ''
+                save_data(tasks); st.session_state.is_logged_in = False; st.rerun()
+            st.markdown("""<a href="." target="_blank" style="display:block;text-align:center;padding:0.45rem;margin-top:0.5rem;background-color:transparent;color:inherit;border-radius:0.5rem;border:1px solid rgba(128,128,128,0.5);text-decoration:none;">➕ 開啟新身分</a>""", unsafe_allow_html=True)
             st.markdown("---")
-            st.markdown("### 📍 系統選單")
-            
-            if st.session_state.role == "護理師":
-                pages = ["👩‍⚕️ 護理師派發", "📊 動態白板", "📂 後台紀錄"]
-            elif st.session_state.role == "醫師":
-                pages = ["👨‍⚕️ 醫師派發", "📊 動態白板", "📂 後台紀錄"]
-            else: 
-                pages = ["🧑‍⚕️ 專師接收任務", "📊 動態白板", "📂 後台紀錄"]
-                
-            page = st.radio("前往頁面", pages, label_visibility="collapsed")
-            
+            pages = ["📊 動態白板", "📂 後台紀錄"]
+            if st.session_state.role == "護理師": pages.insert(0, "👩‍⚕️ 護理師派發")
+            elif st.session_state.role == "醫師": pages.insert(0, "👨‍⚕️ 醫師派發")
+            else: pages.insert(0, "🧑‍⚕️ 專師接收任務")
+            page = st.radio("系統選單", pages, label_visibility="collapsed")
             st.markdown("---")
-            st.write("🔄 狀態：每 5 分鐘自動同步")
             st.caption("© 2026 護理師 吳智弘 版權所有")
-            st.caption("請遵守相關資安與隱私規範，勿輸入真實病患個資。")
-
-        if page == "👩‍⚕️ 護理師派發" or page == "👨‍⚕️ 醫師派發":
-            assigner_interface()
-        elif page == "🧑‍⚕️ 專師接收任務":
-            np_interface()
-        elif page == "📊 動態白板":
-            whiteboard_interface()
-        elif page == "📂 後台紀錄":
-            backend_interface()
+        if "派發" in page: assigner_interface()
+        elif "接收" in page: np_interface()
+        elif "白板" in page: whiteboard_interface()
+        else: backend_interface()
 
 if __name__ == "__main__":
     main()
