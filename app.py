@@ -110,13 +110,18 @@ def check_pii(*texts):
             return True
     return False
 
-# --- 初始化 Session State ---
+# --- 初始化 Session State (加入網址記憶功能以抵抗重新整理) ---
 if "is_logged_in" not in st.session_state:
-    st.session_state.is_logged_in = False
-if "nickname" not in st.session_state:
-    st.session_state.nickname = ""
-if "role" not in st.session_state:
-    st.session_state.role = ""
+    # 檢查網址參數中是否帶有登入資訊
+    if "nickname" in st.query_params and "role" in st.query_params:
+        st.session_state.nickname = st.query_params["nickname"]
+        st.session_state.role = st.query_params["role"]
+        st.session_state.is_logged_in = True
+    else:
+        st.session_state.nickname = ""
+        st.session_state.role = ""
+        st.session_state.is_logged_in = False
+
 if "success_message" not in st.session_state:
     st.session_state.success_message = ""
 if "known_task_ids" not in st.session_state:
@@ -238,7 +243,7 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
             feedback_text = f"鼻孔: {nostril} | 材質: {material} | 固定刻度: {fix_cm} cm"
             
         else:
-            feedback_text = st.text_input("處理結果備註 (選填)", placeholder="例如：已處理完畢、已聯絡科別...")
+            feedback_text = st.text_input("處理結果備註 (選填)", placeholder="例如：已完成採集、已處理完畢...")
             if not feedback_text: feedback_text = "已處理完畢"
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -296,6 +301,7 @@ def login_interface():
         else:
             nickname_input = user_choice
         role_input = st.selectbox("選擇身分", ["請選擇...", "護理師", "醫師", "專科護理師"])
+        
         if st.button("🚀 登入系統", use_container_width=True, type="primary"):
             final_nickname = nickname_input.strip()
             if not final_nickname: st.error("請輸入或選擇綽號！")
@@ -305,6 +311,11 @@ def login_interface():
                 st.session_state.nickname = final_nickname
                 st.session_state.role = role_input
                 st.session_state.is_logged_in = True
+                
+                # 寫入網址列參數，抵抗重新整理
+                st.query_params["nickname"] = final_nickname
+                st.query_params["role"] = role_input
+                
                 st.rerun()
 
 # --- 醫師/護理師共用介面 (派發任務) ---
@@ -340,7 +351,7 @@ def assigner_interface():
     priority = st.radio("優先級別", ["🟢 一般", "🔴 緊急"], horizontal=True)
     task_type = st.radio("協助項目", ["on Foley", "on NG", "Suture (縫合)", "會診", "藥物開立", "聯絡洗腎", "檢體採集"], horizontal=True)
     
-    details = ""; med_details = ""; consult_dept = ""; hd_days = []; spec_type = ""; wound_sub = ""
+    details = ""; med_details = ""; consult_dept = ""; hd_days = []; spec_type = ""; wound_sub = []
     
     if task_type == "on Foley":
         f_type = st.radio("Foley 種類", ["一般", "矽質"], horizontal=True)
@@ -372,11 +383,20 @@ def assigner_interface():
     elif task_type == "檢體採集":
         spec_type = st.radio("採集內容", ["鼻口腔黏膜", "傷口"], horizontal=True)
         if spec_type == "傷口":
-            wound_sub = st.radio("傷口培養類別", ["嗜氧", "厭氧", "其他 (自行備註)"], horizontal=True)
-            details = f"內容: 傷口 ({wound_sub})"
+            # 傷口培養改為複選
+            wound_sub = st.multiselect("傷口培養類別 (可複選)", ["嗜氧", "厭氧", "其他 (自行備註)"])
+            actual_wounds = []
+            for w in wound_sub:
+                if w == "其他 (自行備註)":
+                    custom_w = st.text_input("請輸入其他培養類別")
+                    actual_wounds.append(custom_w if custom_w else "其他(未填)")
+                else:
+                    actual_wounds.append(w)
+            
+            wound_str = " + ".join(actual_wounds) if actual_wounds else "未選擇"
+            details = f"內容: 傷口 ({wound_str})"
         else:
             details = f"內容: 鼻口腔黏膜"
-            # 專屬護理師的採檢前置作業提醒
             if st.session_state.role == "護理師":
                 st.info("💡 護理師提醒：請印好條碼貼上採檢棒，並放於待採檢區。")
 
@@ -394,6 +414,7 @@ def assigner_interface():
         elif task_type == "聯絡洗腎" and not hd_days: st.warning("⚠️ 請勾選洗腎日！")
         elif task_type == "會診" and not consult_dept: st.warning("⚠️ 請填寫科別！")
         elif task_type == "藥物開立" and not med_details: st.warning("⚠️ 請填寫藥物說明！")
+        elif task_type == "檢體採集" and spec_type == "傷口" and not wound_sub: st.warning("⚠️ 請至少勾選一種傷口培養類別！")
         else:
             new_task = {"id": str(get_tw_time().timestamp()), "time": get_tw_time().strftime("%Y-%m-%d %H:%M:%S"), "priority": priority, "bed": final_bed, "task_type": task_type, "details": details, "requester": st.session_state.nickname, "requester_role": st.session_state.role, "status": "待處理", "handler": "", "start_time": "", "complete_time": "", "feedback": ""}
             if st.session_state.role == "護理師":
@@ -421,7 +442,6 @@ def np_interface():
                 st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
                 st.write(f"📝 內容：{t['details']}")
                 
-                # 鼻口腔黏膜保護警告
                 if t['task_type'] == "檢體採集" and "鼻口腔黏膜" in t['details']:
                     st.warning("🛡️ **防護提醒：** 執行鼻口腔黏膜採集，請務必配戴**護目鏡與口罩**，保護自身安全！")
                 
@@ -500,7 +520,7 @@ def backend_interface():
     c1, c2, c3 = st.columns(3)
     with c1:
         if not sel_rows.empty:
-            csv = sel_rows.to_csv(index=False, encoding='utf-8-sig')
+            csv = sel_rows.drop(columns=["選取", "id"]).to_csv(index=False, encoding='utf-8-sig')
             st.download_button(label=f"📥 匯出選取 ({len(sel_rows)})", data=csv, file_name=f"ER_Tasks_{get_tw_time().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
     with c2:
         if st.button(f"🗑️ 刪除選取 ({len(sel_rows)})", disabled=sel_rows.empty, use_container_width=True):
@@ -523,7 +543,12 @@ def main():
         with st.sidebar:
             st.markdown(f"### 👤 **{st.session_state.nickname}** ({st.session_state.role})")
             if st.button("🚪 下班登出", use_container_width=True):
-                remove_online_status(st.session_state.nickname); tasks = load_data()
+                remove_online_status(st.session_state.nickname)
+                # 登出時清空網址參數，避免下次不小心點進來直接登入
+                if "nickname" in st.query_params: del st.query_params["nickname"]
+                if "role" in st.query_params: del st.query_params["role"]
+                
+                tasks = load_data()
                 for t in tasks:
                     if t['status'] == '執行中' and t['handler'] == st.session_state.nickname:
                         t['status'] = '待處理'; t['handler'] = ''; t['start_time'] = ''
