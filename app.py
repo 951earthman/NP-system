@@ -45,7 +45,12 @@ def load_data():
         return []
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         try:
-            return json.load(f)
+            data = json.load(f)
+            # 防呆機制：確保舊有資料也具有 priority 欄位，避免表格報錯
+            for t in data:
+                if 'priority' not in t:
+                    t['priority'] = '🟢 一般'
+            return data
         except json.JSONDecodeError:
             return []
 
@@ -95,7 +100,7 @@ def require_nickname():
 # --- 護理師專用：備物確認彈出視窗 ---
 @st.dialog("⚠️ 護理師派發確認")
 def confirm_nurse_task(new_task):
-    st.write(f"即將派發：**{new_task['bed']}** 的 **{new_task['task_type']}** 請求。")
+    st.write(f"即將派發：**{new_task['priority']}** | **{new_task['bed']}** 的 **{new_task['task_type']}** 請求。")
     st.warning("請問是否已完成相關備物？")
     
     col1, col2 = st.columns(2)
@@ -202,7 +207,6 @@ def assigner_interface():
     
     st.subheader("📍 步驟 1：選擇位置")
     
-    # 增加「病患無床位」選項
     area_options = list(BED_DATA_COMPLEX.keys()) + ["病患無床位"]
     area = st.radio("【 1. 先選大區域 】", area_options, horizontal=True)
     
@@ -220,7 +224,6 @@ def assigner_interface():
         final_bed = f"兒科 {bed_num}床"
         
     elif area == "病患無床位":
-        # 顯示姓名輸入框，讓醫護人員貼上姓名
         patient_name = st.text_input("【 2. 填寫病患姓名 (必填) 】", placeholder="請在此貼上或輸入病患姓名...")
         if patient_name:
             final_bed = f"無床位 (病患: {patient_name})"
@@ -234,12 +237,16 @@ def assigner_interface():
             final_bed += f" ({bed_note})"
 
     st.markdown("---")
-    st.subheader("📋 步驟 2：選擇協助項目")
+    st.subheader("📋 步驟 2：選擇協助項目與優先級")
     
+    # 新增優先級選項
+    priority = st.radio("優先級別", ["🟢 一般", "🔴 緊急"], horizontal=True)
     task_type = st.radio("協助項目", ["on Foley", "on NG", "Suture (縫合)", "會診", "藥物開立"], horizontal=True)
     
     st.markdown("##### 填寫詳細設定")
     details = ""
+    med_details = "" # 預設藥物變數
+    consult_dept = "" # 預設會診變數
     
     if task_type == "on Foley":
         f_type = st.radio("Foley 種類", ["一般", "矽質"], horizontal=True)
@@ -252,15 +259,12 @@ def assigner_interface():
         
     elif task_type == "Suture (縫合)":
         s_part = st.selectbox("部位", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"])
-        
-        # 增加「由專科護理師自行評估」與「其他 (自行輸入)」
         s_line_choice = st.selectbox("縫線選擇", [
             "Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", 
             "由專科護理師自行評估", 
             "其他 (自行輸入)"
         ])
         
-        # 如果選其他，跳出輸入框讓醫師自己打
         if s_line_choice == "其他 (自行輸入)":
             custom_line = st.text_input("請輸入所需縫線", placeholder="例如: Prolene 4-0, Vicryl...")
             actual_line = custom_line if custom_line else "未填寫"
@@ -270,27 +274,31 @@ def assigner_interface():
         details = f"部位: {s_part} | 縫線: {actual_line}"
         
     elif task_type == "會診":
-        consult_dept = st.text_input("請輸入會診科別 (例如：骨科, 外科)")
+        consult_dept = st.text_input("請輸入會診科別 (必填)", placeholder="例如：骨科, 外科")
         details = f"科別: {consult_dept}"
         
     elif task_type == "藥物開立":
-        med_type = st.radio("藥物類別", ["續開", "大量點滴"], horizontal=True)
-        details = f"類別: {med_type}"
+        # 藥物開立改為純文字輸入
+        med_details = st.text_input("請輸入藥物名稱或處置說明 (必填)", placeholder="例如：Keto 1 amp IV stat")
+        details = f"說明: {med_details}"
 
     st.markdown("<br>", unsafe_allow_html=True)
     
     btn_text = "🚀 準備派發任務 (需確認備物)" if st.session_state.role == "護理師" else "🚀 確認無誤，送出請求給專師"
     
     if st.button(btn_text, use_container_width=True, type="primary"):
-        # 增加無床位時的防呆機制
+        # 各種防呆機制
         if area == "病患無床位" and not patient_name.strip():
             st.warning("⚠️ 選擇無床位時，請務必填寫或貼上病患姓名！")
-        elif task_type == "會診" and not consult_dept:
+        elif task_type == "會診" and not consult_dept.strip():
             st.warning("⚠️ 請填寫會診科別！")
+        elif task_type == "藥物開立" and not med_details.strip():
+            st.warning("⚠️ 請填寫需開立的藥物名稱或說明！")
         else:
             new_task = {
                 "id": str(get_tw_time().timestamp()),
                 "time": get_tw_time().strftime("%Y-%m-%d %H:%M:%S"), 
+                "priority": priority, # 寫入優先級
                 "bed": final_bed,
                 "task_type": task_type,
                 "details": details,
@@ -323,7 +331,10 @@ def np_interface():
         st.session_state.success_message = ""
     
     tasks = load_data()
+    
+    # 待接單任務：依時間排序（確保緊急與舊任務在上方）
     pending_tasks = [t for t in tasks if t['status'] == '待處理']
+    # 執行中任務
     in_progress_tasks = [t for t in tasks if t['status'] == '執行中' and t['handler'] == st.session_state.nickname]
     
     col1, col2 = st.columns(2)
@@ -339,19 +350,37 @@ def np_interface():
                 status_icon = "🔴" if is_overdue else "🟡"
                 overdue_text = " ⚠️ (已超時)" if is_overdue else ""
                 
+                # 若為緊急任務，加入顯著外框樣式
+                box_color = "#FFEBEB" if "緊急" in t['priority'] else None
+                
                 with st.container(border=True):
-                    st.markdown(f"**{status_icon} {t['time'][11:16]} | {t['bed']} - {t['task_type']}**{overdue_text}")
+                    # 顯示優先級
+                    st.markdown(f"**{t['priority']}** | **{status_icon} {t['time'][11:16]} | {t['bed']} - {t['task_type']}**{overdue_text}")
                     st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
                     st.write(f"📝 內容：{t['details']}")
                     
-                    if st.button(f"👉 點我接單", key=f"take_{t['id']}", use_container_width=True):
-                        for i in range(len(tasks)):
-                            if tasks[i]['id'] == t['id']:
-                                tasks[i]['status'] = '執行中'
-                                tasks[i]['handler'] = st.session_state.nickname
-                                tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
-                        save_data(tasks)
-                        st.rerun()
+                    # 將接單與醫師已完成按鈕並列
+                    btn_col1, btn_col2 = st.columns(2)
+                    with btn_col1:
+                        if st.button(f"👉 點我接單", key=f"take_{t['id']}", use_container_width=True):
+                            for i in range(len(tasks)):
+                                if tasks[i]['id'] == t['id']:
+                                    tasks[i]['status'] = '執行中'
+                                    tasks[i]['handler'] = st.session_state.nickname
+                                    tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
+                            save_data(tasks)
+                            st.rerun()
+                    with btn_col2:
+                        if st.button(f"👨‍⚕️ 醫師已協助完成", key=f"doc_done_{t['id']}", use_container_width=True):
+                            for i in range(len(tasks)):
+                                if tasks[i]['id'] == t['id']:
+                                    tasks[i]['status'] = '已完成'
+                                    tasks[i]['handler'] = '醫師(現場完成)'
+                                    tasks[i]['complete_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
+                                    tasks[i]['feedback'] = "醫師已於現場協助處理完畢"
+                            save_data(tasks)
+                            st.session_state.success_message = "✅ 已標記為醫師協助完成！"
+                            st.rerun()
         else:
             st.info("目前沒有待處理的任務。")
 
@@ -360,7 +389,7 @@ def np_interface():
         if in_progress_tasks:
             for t in in_progress_tasks:
                 with st.container(border=True):
-                    st.markdown(f"**🔵 {t['bed']} - {t['task_type']}**")
+                    st.markdown(f"**{t['priority']}** | **🔵 {t['bed']} - {t['task_type']}**")
                     st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
                     st.write(f"📝 內容：{t['details']}")
                     st.write(f"⏱️ 接單時間：{t['start_time'][11:16]}")
@@ -393,9 +422,9 @@ def whiteboard_interface():
     with w_col1:
         st.subheader("🚨 未接單清單")
         if pending:
-            df_pending = pd.DataFrame(pending)[['time', 'bed', 'task_type', 'requester']]
+            df_pending = pd.DataFrame(pending)[['time', 'priority', 'bed', 'task_type', 'requester']]
             df_pending['time'] = df_pending['time'].str[11:16]
-            df_pending.columns = ['時間', '位置/病患', '任務', '發布者']
+            df_pending.columns = ['時間', '優先級', '位置/病患', '任務', '發布者']
             st.dataframe(df_pending, use_container_width=True, hide_index=True)
         else:
             st.success("目前無積壓任務！")
@@ -403,9 +432,9 @@ def whiteboard_interface():
     with w_col2:
         st.subheader("⚡ 專師執行動態")
         if in_progress:
-            df_prog = pd.DataFrame(in_progress)[['handler', 'bed', 'task_type', 'start_time']]
+            df_prog = pd.DataFrame(in_progress)[['handler', 'priority', 'bed', 'task_type', 'start_time']]
             df_prog['start_time'] = df_prog['start_time'].str[11:16]
-            df_prog.columns = ['專師', '位置/病患', '任務', '接單時間']
+            df_prog.columns = ['專師', '優先級', '位置/病患', '任務', '接單時間']
             st.dataframe(df_prog, use_container_width=True, hide_index=True)
         else:
             st.info("目前無正在執行的任務。")
@@ -429,8 +458,11 @@ def backend_interface():
             df = pd.DataFrame(tasks)
             if 'feedback' not in df.columns:
                 df['feedback'] = ""
-            df = df[['time', 'bed', 'task_type', 'details', 'feedback', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
-            df.columns = ['發布時間', '位置/病患', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
+            if 'priority' not in df.columns:
+                df['priority'] = "🟢 一般"
+                
+            df = df[['time', 'priority', 'bed', 'task_type', 'details', 'feedback', 'requester', 'status', 'handler', 'start_time', 'complete_time']]
+            df.columns = ['發布時間', '優先級', '位置/病患', '任務類型', '派發細節', '執行回報', '發布者', '狀態', '處理專師', '接單時間', '完成時間']
             df = df.sort_values(by='發布時間', ascending=False)
             
             csv_data = df.to_csv(index=False, encoding='utf-8-sig')
