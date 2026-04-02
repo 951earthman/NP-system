@@ -15,6 +15,7 @@ count = st_autorefresh(interval=300000, limit=None, key="data_sync_refresh")
 
 DATA_FILE = "task_data.json"
 USERS_FILE = "users_data.json"
+ONLINE_FILE = "online_users.json" # 新增：用來記錄人員上線狀態
 
 # --- 台灣時間轉換函數 ---
 def get_tw_time():
@@ -73,6 +74,34 @@ def save_user(nickname):
         users.append(nickname)
         with open(USERS_FILE, "w", encoding="utf-8") as f:
             json.dump(users, f, ensure_ascii=False, indent=4)
+
+# --- 上線狀態管理函數 ---
+def load_online_users():
+    if not os.path.exists(ONLINE_FILE):
+        return {}
+    with open(ONLINE_FILE, "r", encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+def save_online_users(data):
+    with open(ONLINE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def update_online_status(nickname, role):
+    users = load_online_users()
+    users[nickname] = {
+        "role": role,
+        "last_seen": get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    save_online_users(users)
+
+def remove_online_status(nickname):
+    users = load_online_users()
+    if nickname in users:
+        del users[nickname]
+        save_online_users(users)
 
 # --- 資安：身分證字號偵測 ---
 def check_pii(*texts):
@@ -454,17 +483,29 @@ def whiteboard_interface():
     pending = [t for t in tasks if t['status'] == '待處理']
     in_progress = [t for t in tasks if t['status'] == '執行中']
     
-    active_nps = list(set([t['handler'] for t in in_progress if t['handler']]))
+    # 從 online_users.json 抓取最新上線專師狀態 (超時 15 分鐘判定離線)
+    online_users = load_online_users()
+    active_nps = []
+    now = get_tw_time()
+    for name, info in online_users.items():
+        if info['role'] == "專科護理師":
+            last_seen = datetime.strptime(info['last_seen'], "%Y-%m-%d %H:%M:%S")
+            if (now - last_seen).total_seconds() < 900: # 15分鐘
+                active_nps.append(name)
+                
+    busy_nps = list(set([t['handler'] for t in in_progress if t['handler']]))
+    idle_nps = [np for np in active_nps if np not in busy_nps]
     
     col1, col2, col3 = st.columns(3)
     col1.metric("🔴 待處理任務", len(pending), "未接單", delta_color="inverse")
     col2.metric("🔵 執行中任務", len(in_progress), "處理中", delta_color="off")
-    col3.metric("👨‍⚕️ 前線作戰專師", len(active_nps), "上線中", delta_color="normal")
+    col3.metric("👨‍⚕️ 值班專師", len(active_nps), "上線中", delta_color="normal")
     
     if active_nps:
-        col3.caption(f"📍 執行中: {', '.join(active_nps)}")
+        col3.caption(f"🏃 **執行中:** {', '.join(busy_nps) if busy_nps else '無'}")
+        col3.caption(f"☕ **待命中:** {', '.join(idle_nps) if idle_nps else '無'}")
     else:
-        col3.caption("📍 目前無專師執行任務中")
+        col3.caption("📍 目前無專師上線")
     
     st.markdown("---")
     
@@ -503,7 +544,6 @@ def backend_interface():
         st.info("目前系統尚無任何派發紀錄。")
         return
 
-    # 資料整理
     df = pd.DataFrame(tasks)
     if 'feedback' not in df.columns: df['feedback'] = ""
     if 'priority' not in df.columns: df['priority'] = "🟢 一般"
@@ -530,7 +570,6 @@ def backend_interface():
         st.write("") 
         select_all = st.checkbox("✅ 全選所有紀錄")
 
-    # 執行排序
     if sort_by == "發布時間 (最新到最舊)":
         df = df.sort_values(by='發布時間', ascending=False)
     elif sort_by == "發布時間 (最舊到最新)":
@@ -544,22 +583,19 @@ def backend_interface():
     elif sort_by == "處理狀態":
         df = df.sort_values(by=['狀態', '發布時間'], ascending=[True, False])
 
-    # 加入核取方塊欄位
     df.insert(0, "選取", select_all)
 
-    # 可編輯的資料表
     edited_df = st.data_editor(
         df,
         column_config={
             "選取": st.column_config.CheckboxColumn("選取", default=False),
-            "任務ID": None # 隱藏系統用的 UUID 避免版面凌亂
+            "任務ID": None 
         },
-        disabled=df.columns.drop("選取").tolist(), # 鎖定除「選取」以外的所有欄位防竄改
+        disabled=df.columns.drop("選取").tolist(), 
         hide_index=True,
         use_container_width=True
     )
 
-    # 抓出被選取的列
     selected_rows = edited_df[edited_df["選取"] == True]
 
     st.markdown("---")
@@ -568,7 +604,6 @@ def backend_interface():
 
     with col_btn1:
         if not selected_rows.empty:
-            # 匯出時剔除掉 "選取" 與 "任務ID" 欄位，讓 Excel 乾淨
             csv_data = selected_rows.drop(columns=["選取", "任務ID"]).to_csv(index=False, encoding='utf-8-sig')
             st.download_button(
                 label=f"📥 匯出選取的 {len(selected_rows)} 筆紀錄",
@@ -582,7 +617,6 @@ def backend_interface():
 
     with col_btn2:
         if st.button(f"🗑️ 刪除選取的 {len(selected_rows)} 筆紀錄", disabled=selected_rows.empty, use_container_width=True):
-            # 啟動刪除對話框並傳入要刪除的 IDs
             delete_selected_dialog(selected_rows['任務ID'].tolist())
 
     with col_btn3:
@@ -592,6 +626,10 @@ def backend_interface():
 # --- 主程式邏輯 ---
 def main():
     check_for_new_alerts()
+    
+    # 只要網頁開著，定時更新該使用者的上線狀態
+    if st.session_state.is_logged_in:
+        update_online_status(st.session_state.nickname, st.session_state.role)
     
     if not st.session_state.is_logged_in:
         with st.sidebar:
@@ -612,6 +650,10 @@ def main():
             st.markdown(f"**身分：** {st.session_state.role}")
             
             if st.button("🚪 下班登出", use_container_width=True):
+                # 清除線上狀態紀錄
+                remove_online_status(st.session_state.nickname)
+                
+                # 自動退回尚未完成的任務
                 tasks = load_data()
                 for t in tasks:
                     if t['status'] == '執行中' and t['handler'] == st.session_state.nickname:
