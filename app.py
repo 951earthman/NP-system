@@ -4,6 +4,7 @@ import pandas as pd
 import json
 import os
 import re
+import random
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
@@ -110,9 +111,8 @@ def check_pii(*texts):
             return True
     return False
 
-# --- 初始化 Session State (加入網址記憶功能以抵抗重新整理) ---
+# --- 初始化 Session State ---
 if "is_logged_in" not in st.session_state:
-    # 檢查網址參數中是否帶有登入資訊
     if "nickname" in st.query_params and "role" in st.query_params:
         st.session_state.nickname = st.query_params["nickname"]
         st.session_state.role = st.query_params["role"]
@@ -312,7 +312,6 @@ def login_interface():
                 st.session_state.role = role_input
                 st.session_state.is_logged_in = True
                 
-                # 寫入網址列參數，抵抗重新整理
                 st.query_params["nickname"] = final_nickname
                 st.query_params["role"] = role_input
                 
@@ -383,7 +382,6 @@ def assigner_interface():
     elif task_type == "檢體採集":
         spec_type = st.radio("採集內容", ["鼻口腔黏膜", "傷口"], horizontal=True)
         if spec_type == "傷口":
-            # 傷口培養改為複選
             wound_sub = st.multiselect("傷口培養類別 (可複選)", ["嗜氧", "厭氧", "其他 (自行備註)"])
             actual_wounds = []
             for w in wound_sub:
@@ -392,7 +390,6 @@ def assigner_interface():
                     actual_wounds.append(custom_w if custom_w else "其他(未填)")
                 else:
                     actual_wounds.append(w)
-            
             wound_str = " + ".join(actual_wounds) if actual_wounds else "未選擇"
             details = f"內容: 傷口 ({wound_str})"
         else:
@@ -436,35 +433,64 @@ def np_interface():
     c1, c2 = st.columns(2)
     with c1:
         st.subheader(f"🔔 待接單 ({len(pending)})")
-        for t in pending:
-            with st.container(border=True):
-                st.markdown(f"**{t['priority']}** | **{t['time'][11:16]} | {t['bed']} - {t['task_type']}**")
-                st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
-                st.write(f"📝 內容：{t['details']}")
+        if pending:
+            for t in pending:
+                task_time = datetime.strptime(t['time'], "%Y-%m-%d %H:%M:%S")
+                overdue_time = task_time + timedelta(hours=1)
+                is_overdue = get_tw_time() > overdue_time
                 
-                if t['task_type'] == "檢體採集" and "鼻口腔黏膜" in t['details']:
-                    st.warning("🛡️ **防護提醒：** 執行鼻口腔黏膜採集，請務必配戴**護目鏡與口罩**，保護自身安全！")
+                status_icon = "🔴" if is_overdue else "🟡"
+                overdue_text = " ⚠️ (已超時)" if is_overdue else ""
                 
-                b1, b2 = st.columns(2)
-                with b1:
-                    if st.button(f"👉 點我接單", key=f"tk_{t['id']}", use_container_width=True):
-                        for i in range(len(tasks)):
-                            if tasks[i]['id'] == t['id']:
-                                tasks[i]['status'] = '執行中'; tasks[i]['handler'] = st.session_state.nickname; tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
-                        save_data(tasks); st.rerun()
-                with b2:
-                    if st.button(f"👨‍⚕️ 醫師已完成", key=f"dd_{t['id']}", use_container_width=True):
-                        np_feedback_dialog(t['id'], is_doc_assisted=True)
+                with st.container(border=True):
+                    st.markdown(f"**{t['priority']}** | **{status_icon} {t['time'][11:16]} | {t['bed']} - {t['task_type']}**{overdue_text}")
+                    st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
+                    st.write(f"📝 內容：{t['details']}")
+                    
+                    if t['task_type'] == "檢體採集" and "鼻口腔黏膜" in t['details']:
+                        st.warning("🛡️ **防護提醒：** 執行鼻口腔黏膜採集，請務必配戴**護目鏡與口罩**，保護自身安全！")
+                    
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        if st.button(f"👉 點我接單", key=f"tk_{t['id']}", use_container_width=True):
+                            for i in range(len(tasks)):
+                                if tasks[i]['id'] == t['id']:
+                                    tasks[i]['status'] = '執行中'; tasks[i]['handler'] = st.session_state.nickname; tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
+                            save_data(tasks); st.rerun()
+                    with b2:
+                        if st.button(f"👨‍⚕️ 醫師已完成", key=f"dd_{t['id']}", use_container_width=True):
+                            np_feedback_dialog(t['id'], is_doc_assisted=True)
+        else:
+            # 加入溫馨喊話 (無待處理)
+            empty_pending_msgs = [
+                "目前急診前線暫時和平，先去喝口水、喘口氣吧！☕",
+                "待辦清單清空啦！辛苦了，趁現在稍微拉個筋休息一下吧！✨",
+                "現在沒有新任務喔！難得的平靜時刻，讓自己放空三分鐘吧～",
+                "您真的很棒！趁著空檔趕快去上個洗手間，照顧病患也要照顧自己喔！💪"
+            ]
+            st.info(random.choice(empty_pending_msgs))
+
     with c2:
         st.subheader(f"🏃 我的執行中 ({len(in_prog)})")
-        for t in in_prog:
-            with st.container(border=True):
-                st.markdown(f"**{t['priority']}** | **🔵 {t['bed']} - {t['task_type']}**")
-                st.write(f"📝 內容：{t['details']}")
-                if t['task_type'] == "檢體採集" and "鼻口腔黏膜" in t['details']:
-                    st.warning("🛡️ **防護提醒：** 請配戴護目鏡與口罩！")
-                if st.button(f"✅ 標記完成", key=f"dn_{t['id']}", use_container_width=True, type="primary"):
-                    np_feedback_dialog(t['id'], is_doc_assisted=False)
+        if in_prog:
+            for t in in_prog:
+                with st.container(border=True):
+                    st.markdown(f"**{t['priority']}** | **🔵 {t['bed']} - {t['task_type']}**")
+                    st.markdown(f"📞 **派發者：{t['requester']} ({t['requester_role']})**")
+                    st.write(f"📝 內容：{t['details']}")
+                    st.write(f"⏱️ 接單時間：{t['start_time'][11:16]}")
+                    if t['task_type'] == "檢體採集" and "鼻口腔黏膜" in t['details']:
+                        st.warning("🛡️ **防護提醒：** 請配戴護目鏡與口罩！")
+                    if st.button(f"✅ 標記完成", key=f"dn_{t['id']}", use_container_width=True, type="primary"):
+                        np_feedback_dialog(t['id'], is_doc_assisted=False)
+        else:
+            # 加入溫馨喊話 (無執行中)
+            empty_prog_msgs = [
+                "手邊暫時沒有正在執行的處置，可以稍微喘息一下！",
+                "完美結案！現在是您的短暫 off-time，辛苦了！🎉",
+                "目前沒有處理中的任務，隨時準備迎接下一個挑戰！"
+            ]
+            st.success(random.choice(empty_prog_msgs))
 
 # --- 動態白板介面 ---
 def whiteboard_interface():
@@ -544,7 +570,6 @@ def main():
             st.markdown(f"### 👤 **{st.session_state.nickname}** ({st.session_state.role})")
             if st.button("🚪 下班登出", use_container_width=True):
                 remove_online_status(st.session_state.nickname)
-                # 登出時清空網址參數，避免下次不小心點進來直接登入
                 if "nickname" in st.query_params: del st.query_params["nickname"]
                 if "role" in st.query_params: del st.query_params["role"]
                 
