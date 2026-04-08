@@ -38,22 +38,20 @@ def get_tw_time():
 
 # --- 5 分鐘操作逾時自動回歸機制 ---
 if not st.session_state.is_standby and st.session_state.op_mode_start:
-    # 檢查是否在操作模式停留超過 295 秒 (約 5 分鐘)
     if (get_tw_time() - st.session_state.op_mode_start).total_seconds() >= 295:
         st.session_state.is_standby = True
         st.session_state.op_mode_start = None
         st.toast("⏳ 您已停留操作模式超過 5 分鐘，系統已自動切回【待命模式】以確保接收新任務！", icon="🔄")
 
 # --- 動態高頻率心跳機制 (Heartbeat) ---
-# 若為待命模式：每 10 秒刷新一次 (即時接收推播)
-# 若為操作模式：每 5 分鐘 (300000 毫秒) 才刷新一次，確保打字不被中斷
+# 無論是專師接收端或是動態白板，只要在待命模式下，都是每 10 秒刷新一次
 refresh_interval = 10000 if st.session_state.is_standby else 300000
 count = st_autorefresh(interval=refresh_interval, limit=None, key="data_sync_refresh")
 
 # --- 檔案與資料庫操作 ---
 DATA_FILE = "task_data.json"
-USERS_FILE = "users_data.json"
 ONLINE_FILE = "online_users.json"
+# 移除 USERS_FILE 相關設定
 
 BED_DATA_COMPLEX = {
     "留觀(OBS)": {
@@ -88,19 +86,6 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-
-def load_users():
-    if not os.path.exists(USERS_FILE): return []
-    with open(USERS_FILE, "r", encoding="utf-8") as f:
-        try: return json.load(f)
-        except json.JSONDecodeError: return []
-
-def save_user(nickname):
-    users = load_users()
-    if nickname not in users:
-        users.append(nickname)
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(users, f, ensure_ascii=False, indent=4)
 
 def load_online_users():
     if not os.path.exists(ONLINE_FILE): return {}
@@ -138,7 +123,6 @@ def check_for_new_alerts():
     new_ids = current_ids - st.session_state.known_task_ids
     
     if new_ids:
-        # 簡單過濾：如果最新任務是自己發的，就不觸發警報
         latest_new_task = next((t for t in tasks if t['id'] in new_ids), None)
         is_self_dispatched = latest_new_task and latest_new_task.get('requester') == st.session_state.nickname
         
@@ -211,7 +195,7 @@ def confirm_nurse_task(new_task):
             tasks.append(new_task)
             save_data(tasks)
             st.session_state.success_message = f"✅ 已成功送出 【 {new_task['bed']} 】 的 【 {new_task['task_type']} 】 請求！"
-            reset_to_standby() # 送出後自動回歸待命
+            reset_to_standby() 
             st.rerun() 
     with col2:
         if st.button("❌ 尚未完成，返回修改", use_container_width=True):
@@ -312,7 +296,7 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
                 tasks[i]['feedback'] = feedback_text
         save_data(tasks)
         st.session_state.success_message = "✅ 任務結案與回報完成！"
-        reset_to_standby() # 結案後自動回歸待命
+        reset_to_standby() 
         st.rerun()
 
 # --- 後台專用：批次刪除與清空彈窗 ---
@@ -347,20 +331,11 @@ def clear_records_dialog():
 # --- 登入介面 ---
 def login_interface():
     st.header("🔑 系統登入")
-    users_list = load_users()
     
     with st.container(border=True):
-        st.subheader("1. 選擇或輸入您的綽號")
-        if users_list:
-            st.write("曾登入的綽號 (點擊快速選擇)：")
-            cols = st.columns(min(len(users_list), 6))
-            selected_nickname = None
-            for i, user in enumerate(users_list[:6]): 
-                with cols[i]:
-                    if st.button(user, key=f"quick_login_{user}"):
-                        selected_nickname = user
-        
-        nickname_input = st.text_input("或手動輸入新綽號 (必填)", value=selected_nickname if 'selected_nickname' in locals() and selected_nickname else "")
+        st.subheader("1. 輸入您的綽號")
+        # 移除記憶名單，僅保留純文字輸入框
+        nickname_input = st.text_input("手動輸入新綽號 (必填)")
         
         st.markdown("---")
         st.subheader("2. 選擇您的身分")
@@ -369,9 +344,8 @@ def login_interface():
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🚀 登入系統", use_container_width=True, type="primary"):
             final_nickname = nickname_input.strip()
-            if not final_nickname: st.error("請輸入或選擇綽號！")
+            if not final_nickname: st.error("請輸入綽號！")
             else:
-                save_user(final_nickname)
                 st.session_state.nickname = final_nickname
                 st.session_state.role = role_input
                 st.session_state.is_logged_in = True
