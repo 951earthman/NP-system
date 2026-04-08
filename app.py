@@ -125,6 +125,7 @@ if "success_message" not in st.session_state:
 if "known_task_ids" not in st.session_state:
     st.session_state.known_task_ids = set([t['id'] for t in load_data()])
 
+# --- 強力新任務偵測與警報系統 (包含語音與分頁閃爍) ---
 def check_for_new_alerts():
     tasks = load_data()
     current_ids = set([t['id'] for t in tasks])
@@ -132,14 +133,62 @@ def check_for_new_alerts():
     
     if new_ids:
         st.toast("🚨 系統有新的協助任務派發！請查看列表。", icon="🔔")
-        components.html(
-            """
-            <audio autoplay>
-                <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
-            </audio>
-            """,
-            width=0, height=0
-        )
+        
+        # 結合音效、語音播報 (TTS) 與分頁標題閃爍的 JavaScript
+        alert_js = """
+        <script>
+            // 1. 播放提示音 (短嗶聲)
+            let audio = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
+            audio.play().catch(e => console.log("Audio play prevented by browser policy:", e));
+            
+            // 2. 語音播報 (中文)
+            if ('speechSynthesis' in window) {
+                let msg = new SpeechSynthesisUtterance("急診專師請注意，有新任務派發！");
+                msg.lang = 'zh-TW';
+                msg.rate = 1.0;
+                window.speechSynthesis.speak(msg);
+            }
+            
+            // 3. 分頁標題閃爍 (Title Flashing)
+            let originalTitle = document.title;
+            let isFlashing = false;
+            let flashInterval;
+            
+            function startFlashing() {
+                if (isFlashing) return;
+                isFlashing = true;
+                let showAlert = true;
+                flashInterval = setInterval(() => {
+                    document.title = showAlert ? "🚨 新任務！" : "🏥 急診派發系統";
+                    showAlert = !showAlert;
+                }, 1000);
+            }
+            
+            function stopFlashing() {
+                clearInterval(flashInterval);
+                document.title = "🏥 急診專師協助派發系統";
+                isFlashing = false;
+            }
+            
+            // 如果網頁不在最上層 (隱藏狀態)，就開始閃爍
+            if (document.hidden) {
+                startFlashing();
+            } else {
+                // 即便在最上層也閃幾下提醒
+                startFlashing();
+                setTimeout(stopFlashing, 5000);
+            }
+            
+            // 當使用者點擊網頁或切換回這個分頁時，停止閃爍
+            document.addEventListener("visibilitychange", () => {
+                if (!document.hidden) stopFlashing();
+            });
+            document.addEventListener("click", stopFlashing);
+            
+        </script>
+        """
+        components.html(alert_js, width=0, height=0)
+        
     st.session_state.known_task_ids = current_ids
 
 # --- 護理師專用：備物確認彈出視窗 ---
@@ -210,7 +259,7 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
         if task['task_type'] == "Suture (縫合)":
             col_s1, col_s2 = st.columns(2)
             with col_s1:
-                thread_choice = st.selectbox("實際使用縫線", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "其他 (自行輸入)"])
+                thread_choice = st.radio("實際使用縫線", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "其他 (自行輸入)"], horizontal=True)
                 if thread_choice == "其他 (自行輸入)":
                     thread = st.text_input("請輸入自訂縫線", placeholder="例如: Prolene 4-0")
                     if not thread: thread = "未填寫"
@@ -223,22 +272,22 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
         elif task['task_type'] == "on Foley":
             col_f1, col_f2 = st.columns(2)
             with col_f1:
-                material = st.radio("材質", ["一般 (Latex)", "矽質 (Silicone)"])
+                material = st.radio("材質", ["一般 (Latex)", "矽質 (Silicone)"], horizontal=True)
             with col_f2:
-                size = st.selectbox("尺寸 (Fr)", ["14", "16", "18", "20", "22"])
+                size = st.radio("尺寸 (Fr)", ["14", "16", "18", "20", "22"], horizontal=True)
             feedback_text = f"材質: {material} | 尺寸: {size} Fr"
             
         elif task['task_type'] == "on NG":
             col_n1, col_n2 = st.columns(2)
             with col_n1:
-                nostril = st.radio("固定鼻孔", ["左鼻孔", "右鼻孔"])
-                material = st.radio("材質", ["一般 (PVC)", "矽質 (Silicone)"])
+                nostril = st.radio("固定鼻孔", ["左鼻孔", "右鼻孔"], horizontal=True)
+                material = st.radio("材質", ["一般 (PVC)", "矽質 (Silicone)"], horizontal=True)
             with col_n2:
                 fix_cm = st.number_input("固定刻度 (公分數)", min_value=10, max_value=100, value=55, step=1)
             feedback_text = f"鼻孔: {nostril} | 材質: {material} | 固定刻度: {fix_cm} cm"
             
         else:
-            feedback_text = st.text_input("處理結果備註 (選填)", placeholder="例如：已處理完畢、已聯絡科別...")
+            feedback_text = st.text_input("處理結果備註 (選填)", placeholder="例如：已完成採集、已處理完畢...")
             if not feedback_text: feedback_text = "已處理完畢"
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -401,9 +450,9 @@ def assigner_interface():
             
         elif task_type == "安排洗腎":
             if st.session_state.role == "醫師": st.info("💡 醫師提醒：請務必完成「洗腎同意書」！")
-            hd_days = st.multiselect("平常洗腎日 (初次洗腎可不勾選)", ["週一", "週二", "週三", "週四", "週五", "週六", "週日"])
+            hd_days = st.multiselect("平常洗腎日", ["週一", "週二", "週三", "週四", "週五", "週六", "初次洗腎"])
             hd_location = st.radio("地點", ["本院", "外院", "不明"], horizontal=True)
-            days_str = ",".join(hd_days) if hd_days else "無/初次"
+            days_str = ",".join(hd_days) if hd_days else "未勾選"
             details = f"洗腎日: {days_str} | 地點: {hd_location}"
             
         elif task_type == "檢體採集":
@@ -494,7 +543,10 @@ def assigner_interface():
 # --- 專科護理師介面 (接收與處理任務) ---
 def np_interface():
     st.header(f"👩‍⚕️ 專科護理師接收介面")
+    
+    # 執行新任務偵測 (包含發聲與閃爍)
     check_for_new_alerts()
+    
     tasks = load_data()
     pending = [t for t in tasks if t['status'] == '待處理']
     in_prog = [t for t in tasks if t['status'] == '執行中' and t['handler'] == st.session_state.nickname]
