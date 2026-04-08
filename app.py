@@ -8,21 +8,53 @@ import random
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
-# 設定頁面
+# --- 頁面基本設定 ---
 st.set_page_config(page_title="急診專師協助派發系統", page_icon="🏥", layout="wide")
 
-# 設定五分鐘 (300000 毫秒) 自動重新整理一次
-count = st_autorefresh(interval=300000, limit=None, key="data_sync_refresh")
+# --- 初始化 Session State ---
+# 1. 登入狀態與網址記憶
+if "is_logged_in" not in st.session_state:
+    if "nickname" in st.query_params and "role" in st.query_params:
+        st.session_state.nickname = st.query_params["nickname"]
+        st.session_state.role = st.query_params["role"]
+        st.session_state.is_logged_in = True
+    else:
+        st.session_state.nickname = ""
+        st.session_state.role = ""
+        st.session_state.is_logged_in = False
 
-DATA_FILE = "task_data.json"
-USERS_FILE = "users_data.json"
-ONLINE_FILE = "online_users.json"
+if "success_message" not in st.session_state:
+    st.session_state.success_message = ""
+
+# 2. 雙模式切換狀態 (待命 vs 操作)
+if "is_standby" not in st.session_state:
+    st.session_state.is_standby = True  # 預設為待命模式 (即時更新)
+if "op_mode_start" not in st.session_state:
+    st.session_state.op_mode_start = None
 
 # --- 台灣時間轉換函數 ---
 def get_tw_time():
     return datetime.utcnow() + timedelta(hours=8)
 
-# --- 全新分層床位資料庫 ---
+# --- 5 分鐘操作逾時自動回歸機制 ---
+if not st.session_state.is_standby and st.session_state.op_mode_start:
+    # 檢查是否在操作模式停留超過 295 秒 (約 5 分鐘)
+    if (get_tw_time() - st.session_state.op_mode_start).total_seconds() >= 295:
+        st.session_state.is_standby = True
+        st.session_state.op_mode_start = None
+        st.toast("⏳ 您已停留操作模式超過 5 分鐘，系統已自動切回【待命模式】以確保接收新任務！", icon="🔄")
+
+# --- 動態高頻率心跳機制 (Heartbeat) ---
+# 若為待命模式：每 10 秒刷新一次 (即時接收推播)
+# 若為操作模式：每 5 分鐘 (300000 毫秒) 才刷新一次，確保打字不被中斷
+refresh_interval = 10000 if st.session_state.is_standby else 300000
+count = st_autorefresh(interval=refresh_interval, limit=None, key="data_sync_refresh")
+
+# --- 檔案與資料庫操作 ---
+DATA_FILE = "task_data.json"
+USERS_FILE = "users_data.json"
+ONLINE_FILE = "online_users.json"
+
 BED_DATA_COMPLEX = {
     "留觀(OBS)": {
         "OBS 1": ["1", "2", "3", "5", "6", "7", "8", "9", "10", "35", "36", "37", "38"],
@@ -43,31 +75,25 @@ BED_DATA_COMPLEX = {
     "超音波室": {}
 }
 
-# --- 資料庫操作 ---
 def load_data():
-    if not os.path.exists(DATA_FILE):
-        return []
+    if not os.path.exists(DATA_FILE): return []
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         try:
             data = json.load(f)
             for t in data:
                 if 'priority' not in t: t['priority'] = '🟢 一般'
             return data
-        except json.JSONDecodeError:
-            return []
+        except json.JSONDecodeError: return []
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 def load_users():
-    if not os.path.exists(USERS_FILE):
-        return []
+    if not os.path.exists(USERS_FILE): return []
     with open(USERS_FILE, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return []
+        try: return json.load(f)
+        except json.JSONDecodeError: return []
 
 def save_user(nickname):
     users = load_users()
@@ -77,13 +103,10 @@ def save_user(nickname):
             json.dump(users, f, ensure_ascii=False, indent=4)
 
 def load_online_users():
-    if not os.path.exists(ONLINE_FILE):
-        return {}
+    if not os.path.exists(ONLINE_FILE): return {}
     with open(ONLINE_FILE, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {}
+        try: return json.load(f)
+        except json.JSONDecodeError: return {}
 
 def save_online_users(data):
     with open(ONLINE_FILE, "w", encoding="utf-8") as f:
@@ -91,10 +114,7 @@ def save_online_users(data):
 
 def update_online_status(nickname, role):
     users = load_online_users()
-    users[nickname] = {
-        "role": role,
-        "last_seen": get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
-    }
+    users[nickname] = {"role": role, "last_seen": get_tw_time().strftime("%Y-%m-%d %H:%M:%S")}
     save_online_users(users)
 
 def remove_online_status(nickname):
@@ -105,91 +125,78 @@ def remove_online_status(nickname):
 
 def check_pii(*texts):
     for t in texts:
-        if t and re.search(r'[A-Za-z][1289]\d{8}', str(t)):
-            return True
+        if t and re.search(r'[A-Za-z][1289]\d{8}', str(t)): return True
     return False
 
-# --- 初始化 Session State ---
-if "is_logged_in" not in st.session_state:
-    if "nickname" in st.query_params and "role" in st.query_params:
-        st.session_state.nickname = st.query_params["nickname"]
-        st.session_state.role = st.query_params["role"]
-        st.session_state.is_logged_in = True
-    else:
-        st.session_state.nickname = ""
-        st.session_state.role = ""
-        st.session_state.is_logged_in = False
-
-if "success_message" not in st.session_state:
-    st.session_state.success_message = ""
+# 記錄已知的任務 ID，用於推播
 if "known_task_ids" not in st.session_state:
     st.session_state.known_task_ids = set([t['id'] for t in load_data()])
 
-# --- 強力新任務偵測與警報系統 (包含語音與分頁閃爍) ---
 def check_for_new_alerts():
     tasks = load_data()
     current_ids = set([t['id'] for t in tasks])
     new_ids = current_ids - st.session_state.known_task_ids
     
     if new_ids:
-        st.toast("🚨 系統有新的協助任務派發！請查看列表。", icon="🔔")
+        # 簡單過濾：如果最新任務是自己發的，就不觸發警報
+        latest_new_task = next((t for t in tasks if t['id'] in new_ids), None)
+        is_self_dispatched = latest_new_task and latest_new_task.get('requester') == st.session_state.nickname
         
-        # 結合音效、語音播報 (TTS) 與分頁標題閃爍的 JavaScript
-        alert_js = """
-        <script>
-            // 1. 播放提示音 (短嗶聲)
-            let audio = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
-            audio.play().catch(e => console.log("Audio play prevented by browser policy:", e));
-            
-            // 2. 語音播報 (中文)
-            if ('speechSynthesis' in window) {
-                let msg = new SpeechSynthesisUtterance("急診專師請注意，有新任務派發！");
-                msg.lang = 'zh-TW';
-                msg.rate = 1.0;
-                window.speechSynthesis.speak(msg);
-            }
-            
-            // 3. 分頁標題閃爍 (Title Flashing)
-            let originalTitle = document.title;
-            let isFlashing = false;
-            let flashInterval;
-            
-            function startFlashing() {
-                if (isFlashing) return;
-                isFlashing = true;
-                let showAlert = true;
-                flashInterval = setInterval(() => {
-                    document.title = showAlert ? "🚨 新任務！" : "🏥 急診派發系統";
-                    showAlert = !showAlert;
-                }, 1000);
-            }
-            
-            function stopFlashing() {
-                clearInterval(flashInterval);
-                document.title = "🏥 急診專師協助派發系統";
-                isFlashing = false;
-            }
-            
-            // 如果網頁不在最上層 (隱藏狀態)，就開始閃爍
-            if (document.hidden) {
-                startFlashing();
-            } else {
-                // 即便在最上層也閃幾下提醒
-                startFlashing();
-                setTimeout(stopFlashing, 5000);
-            }
-            
-            // 當使用者點擊網頁或切換回這個分頁時，停止閃爍
-            document.addEventListener("visibilitychange", () => {
-                if (!document.hidden) stopFlashing();
-            });
-            document.addEventListener("click", stopFlashing);
-            
-        </script>
-        """
-        components.html(alert_js, width=0, height=0)
+        if not is_self_dispatched:
+            st.toast("🚨 系統有新的協助任務派發！請查看列表。", icon="🔔")
+            alert_js = """
+            <script>
+                let audio = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
+                audio.play().catch(e => console.log("Audio play prevented:", e));
+                
+                if ('speechSynthesis' in window) {
+                    let msg = new SpeechSynthesisUtterance("急診專師請注意，有新任務派發！");
+                    msg.lang = 'zh-TW';
+                    msg.rate = 1.0;
+                    window.speechSynthesis.speak(msg);
+                }
+                
+                let originalTitle = document.title;
+                let isFlashing = false;
+                let flashInterval;
+                
+                function startFlashing() {
+                    if (isFlashing) return;
+                    isFlashing = true;
+                    let showAlert = true;
+                    flashInterval = setInterval(() => {
+                        document.title = showAlert ? "🚨 新任務來囉！" : "🏥 趕快切換回來！";
+                        showAlert = !showAlert;
+                    }, 1000);
+                }
+                
+                function stopFlashing() {
+                    clearInterval(flashInterval);
+                    document.title = "🏥 急診專師協助派發系統";
+                    isFlashing = false;
+                }
+                
+                if (document.hidden) {
+                    startFlashing();
+                } else {
+                    startFlashing();
+                    setTimeout(stopFlashing, 4000);
+                }
+                
+                document.addEventListener("visibilitychange", () => {
+                    if (!document.hidden) stopFlashing();
+                });
+                document.addEventListener("click", stopFlashing);
+            </script>
+            """
+            components.html(alert_js, width=0, height=0)
         
     st.session_state.known_task_ids = current_ids
+
+# --- 自動切換回待命模式工具 ---
+def reset_to_standby():
+    st.session_state.is_standby = True
+    st.session_state.op_mode_start = None
 
 # --- 護理師專用：備物確認彈出視窗 ---
 @st.dialog("⚠️ 護理師派發確認")
@@ -204,6 +211,7 @@ def confirm_nurse_task(new_task):
             tasks.append(new_task)
             save_data(tasks)
             st.session_state.success_message = f"✅ 已成功送出 【 {new_task['bed']} 】 的 【 {new_task['task_type']} 】 請求！"
+            reset_to_standby() # 送出後自動回歸待命
             st.rerun() 
     with col2:
         if st.button("❌ 尚未完成，返回修改", use_container_width=True):
@@ -233,6 +241,7 @@ def confirm_nurse_hd_task(new_task):
                 tasks.append(new_task)
                 save_data(tasks)
                 st.session_state.success_message = f"✅ 已成功送出 【 {new_task['bed']} 】 的 【安排洗腎】 請求！"
+                reset_to_standby()
                 st.rerun()
     with col2:
         if st.button("❌ 返回修改", use_container_width=True):
@@ -303,9 +312,10 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
                 tasks[i]['feedback'] = feedback_text
         save_data(tasks)
         st.session_state.success_message = "✅ 任務結案與回報完成！"
+        reset_to_standby() # 結案後自動回歸待命
         st.rerun()
 
-# --- 後台專用：批次刪除與清空彈出視窗 ---
+# --- 後台專用：批次刪除與清空彈窗 ---
 @st.dialog("⚠️ 警告：刪除選取的紀錄")
 def delete_selected_dialog(ids_to_delete):
     st.error(f"您即將刪除選取的 {len(ids_to_delete)} 筆紀錄！此動作無法復原。")
@@ -534,17 +544,17 @@ def assigner_interface():
             }
             if st.session_state.role == "護理師":
                 if task_type in no_prep_tasks:
-                    tasks = load_data(); tasks.append(new_task); save_data(tasks); st.rerun()
+                    tasks = load_data(); tasks.append(new_task); save_data(tasks); reset_to_standby(); st.rerun()
                 elif task_type == "安排洗腎": confirm_nurse_hd_task(new_task)
                 else: confirm_nurse_task(new_task)
             else:
-                tasks = load_data(); tasks.append(new_task); save_data(tasks); st.rerun()
+                tasks = load_data(); tasks.append(new_task); save_data(tasks); reset_to_standby(); st.rerun()
 
 # --- 專科護理師介面 (接收與處理任務) ---
 def np_interface():
     st.header(f"👩‍⚕️ 專科護理師接收介面")
     
-    # 執行新任務偵測 (包含發聲與閃爍)
+    # 即時推播偵測
     check_for_new_alerts()
     
     tasks = load_data()
@@ -577,7 +587,7 @@ def np_interface():
                             for i in range(len(tasks)):
                                 if tasks[i]['id'] == t['id']:
                                     tasks[i]['status'] = '執行中'; tasks[i]['handler'] = st.session_state.nickname; tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
-                            save_data(tasks); st.rerun()
+                            save_data(tasks); reset_to_standby(); st.rerun()
                     with b2:
                         if st.button(f"👨‍⚕️ 醫師已完成", key=f"dd_{t['id']}", use_container_width=True):
                             np_feedback_dialog(t['id'], is_doc_assisted=True)
@@ -614,6 +624,10 @@ def np_interface():
 # --- 動態白板介面 ---
 def whiteboard_interface():
     st.header("📊 系統動態白板")
+    
+    # 白板頁面同樣加入推播偵測
+    check_for_new_alerts()
+    
     tasks = load_data(); pending = [t for t in tasks if t['status'] == '待處理']; in_prog = [t for t in tasks if t['status'] == '執行中']
     online_users = load_online_users(); active_nps = []; now = get_tw_time()
     for name, info in online_users.items():
@@ -682,6 +696,7 @@ def backend_interface():
 # --- 主程式邏輯 ---
 def main():
     if st.session_state.is_logged_in: update_online_status(st.session_state.nickname, st.session_state.role)
+    
     if not st.session_state.is_logged_in:
         with st.sidebar:
             st.markdown("### 📍 系統導航")
@@ -693,6 +708,24 @@ def main():
     else:
         with st.sidebar:
             st.markdown(f"### 👤 **{st.session_state.nickname}** ({st.session_state.role})")
+            
+            # 雙模式切換面板
+            st.markdown("---")
+            st.markdown("### ⚙️ 畫面更新模式")
+            if st.session_state.is_standby:
+                st.success("🟢 **待命模式** (即時接收推播)")
+                if st.button("⏸️ 切換為 操作模式 (暫停更新)", use_container_width=True):
+                    st.session_state.is_standby = False
+                    st.session_state.op_mode_start = get_tw_time()
+                    st.rerun()
+            else:
+                st.warning("🔴 **操作模式** (畫面暫停更新中...)")
+                st.caption("為避免漏接任務，5 分鐘後將自動切回待命")
+                if st.button("▶️ 切換為 待命模式 (恢復更新)", use_container_width=True):
+                    reset_to_standby()
+                    st.rerun()
+            st.markdown("---")
+            
             if st.button("🚪 下班登出", use_container_width=True):
                 remove_online_status(st.session_state.nickname)
                 if "nickname" in st.query_params: del st.query_params["nickname"]
@@ -712,6 +745,7 @@ def main():
             page = st.radio("系統選單", pages, label_visibility="collapsed")
             st.markdown("---")
             st.caption("© 2026 護理師 吳智弘 版權所有")
+            
         if "派發" in page: assigner_interface()
         elif "接收" in page: np_interface()
         elif "白板" in page: whiteboard_interface()
