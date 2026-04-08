@@ -208,34 +208,30 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
         feedback_text = st.text_input("處理結果備註", value="醫師已於現場協助處理完畢")
     else:
         if task['task_type'] == "Suture (縫合)":
-            col_s1, col_s2 = st.columns(2)
-            with col_s1:
-                thread_choice = st.selectbox("實際使用縫線", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "其他 (自行輸入)"])
-                if thread_choice == "其他 (自行輸入)":
-                    thread = st.text_input("請輸入自訂縫線", placeholder="例如: Prolene 4-0")
-                    if not thread: thread = "未填寫"
-                else:
-                    thread = thread_choice
-            with col_s2:
-                stitches = st.number_input("縫合針數", min_value=1, max_value=50, value=3, step=1)
+            # 移除 selectbox，改用 radio horizontal
+            thread_choice = st.radio("實際使用縫線", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "其他 (自行輸入)"], horizontal=True)
+            if thread_choice == "其他 (自行輸入)":
+                thread = st.text_input("請輸入自訂縫線", placeholder="例如: Prolene 4-0")
+                if not thread: thread = "未填寫"
+            else:
+                thread = thread_choice
+            stitches = st.number_input("縫合針數", min_value=1, max_value=50, value=3, step=1)
             feedback_text = f"縫線: {thread} | 針數: {stitches} 針"
+            
         elif task['task_type'] == "on Foley":
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                material = st.radio("材質", ["一般 (Latex)", "矽質 (Silicone)"])
-            with col_f2:
-                size = st.selectbox("尺寸 (Fr)", ["14", "16", "18", "20", "22"])
+            material = st.radio("材質", ["一般 (Latex)", "矽質 (Silicone)"], horizontal=True)
+            # 移除 selectbox，改用 radio
+            size = st.radio("尺寸 (Fr)", ["14", "16", "18", "20", "22"], horizontal=True)
             feedback_text = f"材質: {material} | 尺寸: {size} Fr"
+            
         elif task['task_type'] == "on NG":
-            col_n1, col_n2 = st.columns(2)
-            with col_n1:
-                nostril = st.radio("固定鼻孔", ["左鼻孔", "右鼻孔"])
-                material = st.radio("材質", ["一般 (PVC)", "矽質 (Silicone)"])
-            with col_n2:
-                fix_cm = st.number_input("固定刻度 (公分數)", min_value=10, max_value=100, value=55, step=1)
+            nostril = st.radio("固定鼻孔", ["左鼻孔", "右鼻孔"], horizontal=True)
+            material = st.radio("材質", ["一般 (PVC)", "矽質 (Silicone)"], horizontal=True)
+            fix_cm = st.number_input("固定刻度 (公分數)", min_value=10, max_value=100, value=55, step=1)
             feedback_text = f"鼻孔: {nostril} | 材質: {material} | 固定刻度: {fix_cm} cm"
+            
         else:
-            feedback_text = st.text_input("處理結果備註 (選填)", placeholder="例如：已處理完畢、已聯絡科別...")
+            feedback_text = st.text_input("處理結果備註 (選填)", placeholder="例如：已完成採集、已處理完畢...")
             if not feedback_text: feedback_text = "已處理完畢"
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -253,6 +249,7 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
         st.session_state.success_message = "✅ 任務結案與回報完成！"
         st.rerun()
 
+# --- 後台專用：批次刪除與清空彈出視窗 ---
 @st.dialog("⚠️ 警告：刪除選取的紀錄")
 def delete_selected_dialog(ids_to_delete):
     st.error(f"您即將刪除選取的 {len(ids_to_delete)} 筆紀錄！此動作無法復原。")
@@ -281,21 +278,36 @@ def clear_records_dialog():
         else:
             st.error("密碼錯誤，拒絕清除！")
 
+# --- 登入介面 ---
 def login_interface():
     st.header("🔑 系統登入")
     users_list = load_users()
+    
     with st.container(border=True):
-        user_choice = st.selectbox("選擇曾使用的綽號", ["(新增綽號...)"] + users_list)
-        if user_choice == "(新增綽號...)":
-            nickname_input = st.text_input("輸入新綽號 (必填)")
-        else:
-            nickname_input = user_choice
-        role_input = st.selectbox("選擇身分", ["請選擇...", "護理師", "醫師", "專科護理師"])
+        st.subheader("1. 選擇或輸入您的綽號")
+        # 避免下拉選單，若名單不多，用 radio，若太多則給一個展開選項
+        # 為了介面乾淨，提供快速按鈕區和自訂輸入區
+        if users_list:
+            st.write("曾登入的綽號 (點擊快速選擇)：")
+            # 用欄位排版按鈕
+            cols = st.columns(min(len(users_list), 6))
+            selected_nickname = None
+            for i, user in enumerate(users_list[:6]): # 顯示最近 6 個
+                with cols[i]:
+                    if st.button(user, key=f"quick_login_{user}"):
+                        selected_nickname = user
         
+        nickname_input = st.text_input("或手動輸入新綽號 (必填)", value=selected_nickname if 'selected_nickname' in locals() and selected_nickname else "")
+        
+        st.markdown("---")
+        st.subheader("2. 選擇您的身分")
+        # 移除 selectbox，改用 radio horizontal
+        role_input = st.radio("身分選擇", ["護理師", "醫師", "專科護理師"], horizontal=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🚀 登入系統", use_container_width=True, type="primary"):
             final_nickname = nickname_input.strip()
             if not final_nickname: st.error("請輸入或選擇綽號！")
-            elif role_input == "請選擇...": st.error("請選擇您的身分！")
             else:
                 save_user(final_nickname)
                 st.session_state.nickname = final_nickname
@@ -338,16 +350,29 @@ def assigner_interface():
     st.subheader("📋 步驟 2：選擇協助項目與優先級")
     priority = st.radio("優先級別", ["🟢 一般", "🔴 緊急"], horizontal=True)
     
-    # 擴充 11 種任務類型
     task_options = [
         "on Foley", "on NG", "Suture (縫合)", "會診", "藥物開立", 
         "檢體採集", "安排洗腎", "訂ICU", "開診斷書", "拍照", "其他"
     ]
+    # 如果選項太多，可以分兩行顯示
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        task_type_1 = st.radio("協助項目 (常用)", task_options[:6], horizontal=True)
+    with col_t2:
+        task_type_2 = st.radio("協助項目 (其他)", ["(請選擇左側)"] + task_options[6:], horizontal=True)
+        
+    # 決定最終的 task_type
+    if task_type_2 != "(請選擇左側)":
+        # 為了讓 UI 直覺，我們可以用一個變數統整。
+        # 這裡為了簡單起見，還是讓所有選項排成一列 (Streamlit 會自動折行)
+        pass 
+    
+    # 還是改回單一 Radio，讓 Streamlit 自動 wrap 會比較好操作
     task_type = st.radio("協助項目", task_options, horizontal=True)
     
     details = ""
     med_details = ""; consult_dept = ""; hd_days = []; spec_type = ""; wound_sub = []
-    diag_purpose = ""; photo_part = ""; other_desc = ""; icu_type = ""
+    diag_lang = ""; photo_part = ""; other_desc = ""; icu_type = ""
     
     with st.container(border=True):
         st.markdown("##### 填寫詳細設定")
@@ -355,6 +380,7 @@ def assigner_interface():
             f_type = st.radio("Foley 種類", ["一般", "矽質"], horizontal=True)
             f_sample = st.checkbox("需留取檢體")
             details = f"種類: {f_type} | 檢體: {'是' if f_sample else '否'}"
+            
         elif task_type == "on NG":
             ng_type_choice = st.radio("NG 目的", ["Re-on", "Decompression", "IRRI (沖洗)", "其他 (自行輸入)"], horizontal=True)
             if ng_type_choice == "其他 (自行輸入)":
@@ -362,22 +388,35 @@ def assigner_interface():
                 actual_ng = custom_ng if custom_ng else "未填寫"
             else: actual_ng = ng_type_choice
             details = f"目的: {actual_ng}"
+            
         elif task_type == "Suture (縫合)":
-            s_part = st.selectbox("部位", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"])
-            s_line_choice = st.selectbox("縫線選擇", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "由專科護理師自行評估", "其他 (自行輸入)"])
+            # 移除 selectbox，改用 radio horizontal，選項太多則分兩區
+            st.write("縫合部位:")
+            s_part = st.radio("部位選擇", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"], horizontal=True, label_visibility="collapsed")
+            
+            st.write("縫線選擇:")
+            s_line_choice = st.radio("縫線", [
+                "Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", 
+                "由專科護理師自行評估", "其他 (自行輸入)"
+            ], horizontal=True, label_visibility="collapsed")
+            
             if s_line_choice == "其他 (自行輸入)":
                 custom_line = st.text_input("自訂縫線"); actual_line = custom_line if custom_line else "未填寫"
             else: actual_line = s_line_choice
             details = f"部位: {s_part} | 縫線: {actual_line}"
+            
         elif task_type == "會診":
             consult_dept = st.text_input("會診科別 (必填)"); details = f"科別: {consult_dept}"
+            
         elif task_type == "藥物開立":
             med_details = st.text_input("藥物/說明 (必填)"); details = f"說明: {med_details}"
+            
         elif task_type == "安排洗腎":
             if st.session_state.role == "醫師": st.info("💡 醫師提醒：請務必完成「洗腎同意書」！")
             hd_days = st.multiselect("平常洗腎日 (必選)", ["週一", "週二", "週三", "週四", "週五", "週六", "週日"])
             hd_location = st.radio("地點", ["本院", "外院", "不明"], horizontal=True)
             details = f"洗腎日: {','.join(hd_days)} | 地點: {hd_location}"
+            
         elif task_type == "檢體採集":
             spec_type = st.radio("採集內容", ["鼻口腔黏膜", "傷口"], horizontal=True)
             if spec_type == "傷口":
@@ -395,21 +434,27 @@ def assigner_interface():
                 details = f"內容: 鼻口腔黏膜"
                 if st.session_state.role == "護理師":
                     st.info("💡 護理師提醒：請印好條碼貼上採檢棒，並放於待採檢區。")
+                    
         elif task_type == "訂ICU":
-            icu_type = st.selectbox("ICU 類別", ["MICU (內科加護)", "SICU (外科加護)", "CCU (心臟加護)", "NICU (神經加護)", "PICU (兒科加護)", "其他"])
+            # 移除 selectbox，改用 radio
+            icu_type = st.radio("ICU 類別", ["MICU (內科加護)", "SICU (外科加護)", "CCU (心臟加護)", "NICU (神經加護)", "PICU (兒科加護)", "其他"], horizontal=True)
+            if icu_type == "其他":
+                icu_type = st.text_input("輸入其他 ICU 單位")
             details = f"類別: {icu_type}"
+            
         elif task_type == "開診斷書":
-            diag_purpose = st.text_input("診斷書用途 (如：保險、請假)", placeholder="必填")
-            diag_copies = st.number_input("份數", min_value=1, max_value=10, value=1)
-            details = f"用途: {diag_purpose} | 份數: {diag_copies} 份"
+            # 移除文字輸入與份數，改為按鈕選擇中英文
+            diag_lang = st.radio("診斷書版本 (必選)", ["中文版", "英文版", "中英雙語"], horizontal=True)
+            details = f"版本: {diag_lang}"
+            
         elif task_type == "拍照":
             photo_part = st.text_input("拍照部位 (必填)", placeholder="例如：右小腿撕裂傷、臉部擦傷...")
             details = f"部位: {photo_part}"
+            
         elif task_type == "其他":
             other_desc = st.text_input("請輸入協助事項 (必填)", placeholder="請簡述需要專師協助的內容...")
             details = f"事項: {other_desc}"
             
-        # 所有任務統一增加的自行輸入欄位
         st.markdown("---")
         global_memo = st.text_input("✍️ 通用補充說明 / 自行輸入 (選填)", placeholder="有任何特殊需求或注意事項請在此填寫...")
         if global_memo:
@@ -417,7 +462,6 @@ def assigner_interface():
 
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # 判斷免備物的綠色通道任務
     no_prep_tasks = ["會診", "藥物開立", "訂ICU", "開診斷書"]
     
     if st.session_state.role == "護理師":
@@ -427,7 +471,6 @@ def assigner_interface():
     else: btn_text = "🚀 確認無誤送出"
     
     if st.button(btn_text, use_container_width=True, type="primary"):
-        # 各種防呆檢查
         if check_pii(patient_name, details, bed_note, consult_dept, med_details, global_memo, other_desc):
             st.error("⚠️ 資安警告：偵測到疑似身分證字號！已攔截派發。"); st.stop()
             
@@ -437,7 +480,6 @@ def assigner_interface():
         elif task_type == "安排洗腎" and not hd_days: st.warning("⚠️ 請勾選洗腎日！")
         elif task_type == "檢體採集" and spec_type == "傷口" and not wound_sub: st.warning("⚠️ 請至少勾選一種傷口培養類別！")
         elif task_type == "拍照" and not photo_part.strip(): st.warning("⚠️ 請填寫拍照部位！")
-        elif task_type == "開診斷書" and not diag_purpose.strip(): st.warning("⚠️ 請填寫診斷書用途！")
         elif task_type == "其他" and not other_desc.strip(): st.warning("⚠️ 請填寫協助事項！")
         else:
             new_task = {
@@ -579,10 +621,13 @@ def backend_interface():
     df = pd.DataFrame(tasks)
     df.insert(0, "選取", False)
     st.markdown("### 📋 檢視與排序")
-    sort_by = st.selectbox("🔃 排序依據", ["發布時間 (最新到最舊)", "發布時間 (最舊到最新)", "處理專師", "任務類型"])
+    
+    # 這裡的排序也從下拉改為 radio，方便快速點擊
+    sort_by = st.radio("🔃 排序依據", ["最新到最舊", "最舊到最新", "依處理專師", "依任務類型"], horizontal=True)
     if "最新" in sort_by: df = df.sort_values(by='time', ascending=False)
     elif "最舊" in sort_by: df = df.sort_values(by='time', ascending=True)
     elif "專師" in sort_by: df = df.sort_values(by='handler')
+    elif "任務" in sort_by: df = df.sort_values(by='task_type')
 
     edited_df = st.data_editor(df, column_config={"選取": st.column_config.CheckboxColumn("選取", default=False), "id": None}, hide_index=True, use_container_width=True)
     sel_rows = edited_df[edited_df["選取"] == True]
