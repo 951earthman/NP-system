@@ -51,6 +51,7 @@ def send_line_notification(task_data):
 # ==========================================
 
 # --- 初始化 Session State ---
+# 1. 登入狀態與網址記憶
 if "is_logged_in" not in st.session_state:
     if "nickname" in st.query_params and "role" in st.query_params:
         st.session_state.nickname = st.query_params["nickname"]
@@ -64,24 +65,32 @@ if "is_logged_in" not in st.session_state:
 if "success_message" not in st.session_state:
     st.session_state.success_message = ""
 
+# 2. 雙模式切換狀態 (待命 vs 操作)
 if "is_standby" not in st.session_state:
     st.session_state.is_standby = True  
 if "op_mode_start" not in st.session_state:
     st.session_state.op_mode_start = None
 
+# 3. 動態表單金鑰 (用於送出後完美重置表單)
+if "form_id" not in st.session_state:
+    st.session_state.form_id = 0
+
 # --- 台灣時間轉換函數 ---
 def get_tw_time():
     return datetime.utcnow() + timedelta(hours=8)
 
+# --- 5 分鐘操作逾時自動回歸機制 ---
 if not st.session_state.is_standby and st.session_state.op_mode_start:
     if (get_tw_time() - st.session_state.op_mode_start).total_seconds() >= 295:
         st.session_state.is_standby = True
         st.session_state.op_mode_start = None
         st.toast("⏳ 您已停留操作模式超過 5 分鐘，系統已自動切回【待命模式】以確保接收新任務！", icon="🔄")
 
+# --- 動態高頻率心跳機制 (Heartbeat) ---
 refresh_interval = 10000 if st.session_state.is_standby else 300000
 count = st_autorefresh(interval=refresh_interval, limit=None, key="data_sync_refresh")
 
+# --- 檔案與資料庫操作 ---
 DATA_FILE = "task_data.json"
 ONLINE_FILE = "online_users.json"
 
@@ -219,14 +228,22 @@ def reset_to_standby():
     st.session_state.is_standby = True
     st.session_state.op_mode_start = None
 
-def checkbox_matrix(options, num_columns=4):
+# --- UI 輔助函數：展開式複選框矩陣 ---
+def checkbox_matrix(options, key_prefix, num_columns=4):
+    """將選項攤平為 checkbox 矩陣，並利用 form_id 確保能自動重置"""
     selected = []
     cols = st.columns(num_columns)
     for i, option in enumerate(options):
         with cols[i % num_columns]:
-            if st.checkbox(option, key=f"matrix_{option}"):
+            # 動態 Key 綁定 form_id，送出後自動失效重置
+            if st.checkbox(option, key=f"matrix_{key_prefix}_{option}_{st.session_state.form_id}"):
                 selected.append(option)
     return selected
+
+# --- 動態 Key 產生器 ---
+def k(name):
+    """根據當前 form_id 產生唯一的 key，用於表單送出後自動清空"""
+    return f"{name}_{st.session_state.form_id}"
 
 # --- 確認彈出視窗 ---
 @st.dialog("⚠️ 確認派發任務")
@@ -263,6 +280,9 @@ def confirm_dispatch_dialog(new_task, require_prep=False, require_hd_consent=Fal
                 tasks.append(new_task)
                 save_data(tasks)
                 send_line_notification(new_task)
+                
+                # 【關鍵邏輯】觸發表單重置與回歸待命
+                st.session_state.form_id += 1  
                 st.session_state.success_message = f"✅ 已成功送出 【 {new_task['bed']} 】 的 【{new_task['task_type']}】 請求！"
                 reset_to_standby() 
                 st.rerun() 
@@ -321,7 +341,6 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
 
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("💾 儲存回報並結案", type="primary", use_container_width=True):
-        # [關鍵修正]：重新讀取最新資料，確保不會蓋掉別人的更新
         latest_tasks = load_data()
         for i in range(len(latest_tasks)):
             if latest_tasks[i]['id'] == task_id:
@@ -335,12 +354,12 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
         save_data(latest_tasks)
         st.session_state.success_message = "✅ 任務結案與回報完成！"
         reset_to_standby() 
-        st.rerun() # 立刻強制重繪畫面
+        st.rerun()
 
 @st.dialog("⚠️ 警告：刪除選取的紀錄")
 def delete_selected_dialog(ids_to_delete):
     st.error(f"您即將刪除選取的 {len(ids_to_delete)} 筆紀錄！此動作無法復原。")
-    pwd = st.text_input("請輸入系統密碼以確認", type="password", key="pwd_del_sel")
+    pwd = st.text_input("請輸入系統密碼以確認", type="password")
     if st.button("🚨 確認刪除選取項目", type="primary", use_container_width=True):
         if pwd == "6155":
             tasks = load_data()
@@ -355,7 +374,7 @@ def delete_selected_dialog(ids_to_delete):
 @st.dialog("💥 警告：清除全部紀錄")
 def clear_records_dialog():
     st.error("您即將清除系統中的「所有」任務紀錄！此動作無法復原。")
-    pwd = st.text_input("請輸入系統密碼以確認", type="password", key="pwd_clear_all")
+    pwd = st.text_input("請輸入系統密碼以確認", type="password")
     if st.button("🚨 確認清空資料庫", type="primary", use_container_width=True):
         if pwd == "6155":
             save_data([]) 
@@ -388,6 +407,7 @@ def login_interface():
                 st.query_params["role"] = role_input
                 st.rerun()
 
+# --- 派發任務介面 (醫師/護理師) ---
 def assigner_interface(view_role="護理師"):
     st.header(f"👋 {view_role} 派發介面")
     
@@ -399,57 +419,57 @@ def assigner_interface(view_role="護理師"):
     
     st.subheader("📍 步驟 1：選擇位置")
     area_options = list(BED_DATA_COMPLEX.keys()) + ["病患無床位"]
-    area = st.radio("【 1. 先選大區域 】", area_options, horizontal=True)
+    area = st.radio("【 1. 先選大區域 】", area_options, horizontal=True, key=k("area"))
     final_bed = ""; bed_note = ""; patient_name = ""
     
     if area in ["留觀(OBS)", "診間"]:
-        sub_area = st.radio(f"【 2. 選擇 {area} 區域 】", list(BED_DATA_COMPLEX[area].keys()), horizontal=True)
-        bed_num = st.radio(f"【 3. 選擇 {sub_area} 床號 】", BED_DATA_COMPLEX[area][sub_area], horizontal=True)
+        sub_area = st.radio(f"【 2. 選擇 {area} 區域 】", list(BED_DATA_COMPLEX[area].keys()), horizontal=True, key=k("sub_area"))
+        bed_num = st.radio(f"【 3. 選擇 {sub_area} 床號 】", BED_DATA_COMPLEX[area][sub_area], horizontal=True, key=k("bed_num"))
         final_bed = f"{sub_area} {bed_num}床"
     elif area == "兒科":
-        bed_num = st.radio("【 2. 選擇床號 】", BED_DATA_COMPLEX[area]["兒科床位"], horizontal=True)
+        bed_num = st.radio("【 2. 選擇床號 】", BED_DATA_COMPLEX[area]["兒科床位"], horizontal=True, key=k("peds_bed"))
         final_bed = f"兒科 {bed_num}床"
     elif area == "病患無床位":
-        patient_name = st.text_input("【 2. 填寫病患姓名 (必填) 】", placeholder="請在此貼上或輸入病患姓名...")
+        patient_name = st.text_input("【 2. 填寫病患姓名 (必填) 】", placeholder="請在此貼上或輸入病患姓名...", key=k("patient_name"))
         if patient_name: final_bed = f"無床位 (病患: {patient_name})"
         else: final_bed = "無床位"
     else:
-        bed_note = st.text_input(f"【 2. {area} 備註 (選填) 】", placeholder="例如：等待推床...")
+        bed_note = st.text_input(f"【 2. {area} 備註 (選填) 】", placeholder="例如：等待推床...", key=k("bed_note"))
         final_bed = area
         if bed_note: final_bed += f" ({bed_note})"
 
     st.markdown("---")
     st.subheader("📋 步驟 2：選擇協助項目與優先級")
-    priority = st.radio("優先級別", ["🟢 一般", "🔴 緊急"], horizontal=True)
+    priority = st.radio("優先級別", ["🟢 一般", "🔴 緊急"], horizontal=True, key=k("priority"))
     
     task_options = [
         "on Foley", "on NG", "Suture (縫合)", "會診", "藥物開立", 
-        "檢體採集", "安排洗腎", "訂ICU", "開診斷書", "拍照", "其他"
+        "檢體採集", "安排洗腎", "訂ICU", "開診斷書", "拍照", "追蹤", "其他"
     ]
-    task_type = st.radio("協助項目", task_options, horizontal=True)
+    task_type = st.radio("協助項目", task_options, horizontal=True, key=k("task_type"))
     
     details = ""
     med_details = ""; consult_dept_str = ""; hd_days = []; spec_type = ""; wound_sub = []
     wound_part_sub = []; diag_lang = ""; photo_part = ""; other_desc = ""; icu_type = ""
-    consult_dept_subs = []; s_part_subs = []; s_line_subs = []
     
     actual_s_parts = []
     actual_s_lines = []
     actual_consult_depts = []
     actual_wound_parts = []
     actual_wounds = []
+    actual_tracks = []
     
     with st.container(border=True):
         st.markdown("##### 填寫詳細設定")
         if task_type == "on Foley":
-            f_type = st.radio("Foley 種類", ["一般", "矽質"], horizontal=True)
-            f_sample = st.checkbox("需留取檢體")
+            f_type = st.radio("Foley 種類", ["一般", "矽質"], horizontal=True, key=k("f_type"))
+            f_sample = st.checkbox("需留取檢體", key=k("f_sample"))
             details = f"種類: {f_type} | 檢體: {'是' if f_sample else '否'}"
             
         elif task_type == "on NG":
-            ng_type_choice = st.radio("NG 目的", ["Re-on", "Decompression", "IRRI (沖洗)", "其他 (自行輸入)"], horizontal=True)
+            ng_type_choice = st.radio("NG 目的", ["Re-on", "Decompression", "IRRI (沖洗)", "其他 (自行輸入)"], horizontal=True, key=k("ng_type"))
             if ng_type_choice == "其他 (自行輸入)":
-                custom_ng = st.text_input("請輸入自訂目的")
+                custom_ng = st.text_input("請輸入自訂目的", key=k("custom_ng"))
                 actual_ng = custom_ng if custom_ng else "未填寫"
             else: actual_ng = ng_type_choice
             details = f"目的: {actual_ng}"
@@ -457,16 +477,16 @@ def assigner_interface(view_role="護理師"):
         elif task_type == "Suture (縫合)":
             st.write("縫合部位 (可複選):")
             s_parts = ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"]
-            selected_s_parts = checkbox_matrix(s_parts, num_columns=5)
-            custom_s_part = st.text_input("其他縫合部位 (自行輸入)")
+            selected_s_parts = checkbox_matrix(s_parts, "s_part", num_columns=5)
+            custom_s_part = st.text_input("其他縫合部位 (自行輸入)", key=k("custom_s_part"))
             if custom_s_part: selected_s_parts.append(custom_s_part)
             s_part_str = " + ".join(selected_s_parts) if selected_s_parts else "未選擇部位"
             actual_s_parts = selected_s_parts 
             
             st.write("縫線選擇 (可複選):")
             s_lines = ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "由專科護理師自行評估"]
-            selected_s_lines = checkbox_matrix(s_lines, num_columns=4)
-            custom_s_line = st.text_input("其他縫線 (自行輸入)")
+            selected_s_lines = checkbox_matrix(s_lines, "s_line", num_columns=4)
+            custom_s_line = st.text_input("其他縫線 (自行輸入)", key=k("custom_s_line"))
             if custom_s_line: selected_s_lines.append(custom_s_line)
             s_line_str = " + ".join(selected_s_lines) if selected_s_lines else "未選擇縫線"
             actual_s_lines = selected_s_lines 
@@ -480,8 +500,8 @@ def assigner_interface(view_role="護理師"):
                 "CVS (心臟血管外科)", "GU (泌尿科)", "Ortho (骨科)", "NS (神經外科)",
                 "GYN (婦產科)", "CV (心臟內科)", "Hospice (安寧/家醫科)", "INF (感染科)"
             ]
-            selected_depts = checkbox_matrix(depts, num_columns=4)
-            custom_dept = st.text_input("其他會診科別 (自行輸入)")
+            selected_depts = checkbox_matrix(depts, "dept", num_columns=4)
+            custom_dept = st.text_input("其他會診科別 (自行輸入)", key=k("custom_dept"))
             if custom_dept: selected_depts.append(custom_dept)
             actual_consult_depts = selected_depts 
             
@@ -489,33 +509,34 @@ def assigner_interface(view_role="護理師"):
             details = f"科別: {consult_dept_str}"
             
         elif task_type == "藥物開立":
-            med_details = st.text_input("藥物/說明 (必填)"); details = f"說明: {med_details}"
+            med_details = st.text_input("藥物/說明 (必填)", key=k("med_details"))
+            details = f"說明: {med_details}"
             
         elif task_type == "安排洗腎":
             if view_role == "醫師": st.info("💡 醫師提醒：請務必完成「洗腎同意書」！")
             st.write("平常洗腎日 (可複選):")
             hd_day_opts = ["週一", "週二", "週三", "週四", "週五", "週六", "初次洗腎"]
-            hd_days = checkbox_matrix(hd_day_opts, num_columns=4)
+            hd_days = checkbox_matrix(hd_day_opts, "hd_day", num_columns=4)
             
-            hd_location = st.radio("地點", ["本院", "外院", "不明"], horizontal=True)
+            hd_location = st.radio("地點", ["本院", "外院", "不明"], horizontal=True, key=k("hd_location"))
             days_str = ",".join(hd_days) if hd_days else "未勾選"
             details = f"洗腎日: {days_str} | 地點: {hd_location}"
             
         elif task_type == "檢體採集":
-            spec_type = st.radio("採集內容", ["鼻口腔黏膜", "傷口"], horizontal=True)
+            spec_type = st.radio("採集內容", ["鼻口腔黏膜", "傷口"], horizontal=True, key=k("spec_type"))
             if spec_type == "傷口":
                 st.write("傷口部位 (可複選):")
                 wp_opts = ["頭頸部", "軀幹", "上肢", "下肢", "臀部/會陰"]
-                selected_wps = checkbox_matrix(wp_opts, num_columns=5)
-                custom_wp = st.text_input("其他傷口部位 (自行輸入)")
+                selected_wps = checkbox_matrix(wp_opts, "wp", num_columns=5)
+                custom_wp = st.text_input("其他傷口部位 (自行輸入)", key=k("custom_wp"))
                 if custom_wp: selected_wps.append(custom_wp)
                 actual_wound_parts = selected_wps
                 wound_part_str = " + ".join(selected_wps) if selected_wps else "未選擇部位"
                 
                 st.write("傷口培養類別 (可複選):")
                 w_opts = ["嗜氧", "厭氧"]
-                selected_ws = checkbox_matrix(w_opts, num_columns=2)
-                custom_w = st.text_input("其他培養類別 (自行備註)")
+                selected_ws = checkbox_matrix(w_opts, "ws", num_columns=2)
+                custom_w = st.text_input("其他培養類別 (自行備註)", key=k("custom_w"))
                 if custom_w: selected_ws.append(custom_w)
                 actual_wounds = selected_ws
                 wound_str = " + ".join(selected_ws) if selected_ws else "未選擇培養"
@@ -527,33 +548,50 @@ def assigner_interface(view_role="護理師"):
                     st.info("💡 護理師提醒：請印好條碼貼上採檢棒，並放於待採檢區。")
                     
         elif task_type == "訂ICU":
-            icu_type = st.radio("ICU 類別", ["MICU (內科加護)", "CCU (心臟加護)", "PICU (兒科加護)", "其他"], horizontal=True)
+            icu_type = st.radio("ICU 類別", ["MICU (內科加護)", "CCU (心臟加護)", "PICU (兒科加護)", "其他"], horizontal=True, key=k("icu_type"))
             if icu_type == "其他":
-                icu_type = st.text_input("輸入其他 ICU 單位")
-            details = f"類別: {icu_type}"
+                icu_actual = st.text_input("輸入其他 ICU 單位", key=k("custom_icu"))
+            else:
+                icu_actual = icu_type
+            details = f"類別: {icu_actual}"
             
         elif task_type == "開診斷書":
-            diag_lang = st.radio("診斷書版本 (必選)", ["中文版", "英文版", "中英雙語"], horizontal=True)
+            diag_lang = st.radio("診斷書版本 (必選)", ["中文版", "英文版", "中英雙語"], horizontal=True, key=k("diag_lang"))
             details = f"版本: {diag_lang}"
             
         elif task_type == "拍照":
-            photo_part = st.text_input("拍照部位 (必填)", placeholder="例如：右小腿撕裂傷、臉部擦傷...")
+            photo_part = st.text_input("拍照部位 (必填)", placeholder="例如：右小腿撕裂傷、臉部擦傷...", key=k("photo_part"))
             details = f"部位: {photo_part}"
             
+        elif task_type == "追蹤":
+            st.write("追蹤項目 (可複選):")
+            track_opts = ["會診回復", "消化道檢查報告", "放射科檢查報告", "心電圖", "Lab data"]
+            selected_tracks = checkbox_matrix(track_opts, "track", num_columns=5)
+            custom_track = st.text_input("追蹤項目說明 / 其他 (自行輸入)", placeholder="例如：GS的會診回復、胃鏡檢查報告、ileus追蹤...", key=k("custom_track"))
+            
+            actual_tracks = list(selected_tracks)
+            if custom_track.strip():
+                actual_tracks.append(custom_track.strip())
+                
+            track_str = " + ".join(actual_tracks) if actual_tracks else "未填寫"
+            details = f"項目: {track_str}"
+            
         elif task_type == "其他":
-            other_desc = st.text_input("請輸入協助事項 (必填)", placeholder="請簡述需要專師協助的內容...")
+            other_desc = st.text_input("請輸入協助事項 (必填)", placeholder="請簡述需要專師協助的內容...", key=k("other_desc"))
             details = f"事項: {other_desc}"
             
         st.markdown("---")
-        global_memo = st.text_input("✍️ 通用補充說明 / 自行輸入 (選填)", placeholder="有任何特殊需求或注意事項請在此填寫...")
+        global_memo = st.text_input("✍️ 通用補充說明 / 自行輸入 (選填)", placeholder="有任何特殊需求或注意事項請在此填寫...", key=k("global_memo"))
         if global_memo:
             details += f" | 補充: {global_memo}"
 
     st.markdown("<br>", unsafe_allow_html=True)
     
-    no_prep_tasks = ["會診", "藥物開立", "訂ICU", "開診斷書"]
+    # 判斷是否需要備物確認 (護理師專用邏輯)
+    no_prep_tasks = ["會診", "藥物開立", "訂ICU", "開診斷書", "追蹤"]
     
     if st.button("🚀 準備派發任務", use_container_width=True, type="primary"):
+        # 防呆檢查 
         if check_pii(patient_name, details, bed_note, consult_dept_str, med_details, global_memo, other_desc):
             st.error("⚠️ 資安警告：偵測到疑似身分證字號！已攔截派發。"); st.stop()
             
@@ -564,6 +602,7 @@ def assigner_interface(view_role="護理師"):
         elif task_type == "藥物開立" and not med_details.strip(): st.warning("⚠️ 請填寫藥物說明！")
         elif task_type == "檢體採集" and spec_type == "傷口" and (not actual_wounds or not actual_wound_parts): st.warning("⚠️ 傷口採集請務必勾選「部位」與「培養類別」！")
         elif task_type == "拍照" and not photo_part.strip(): st.warning("⚠️ 請填寫拍照部位！")
+        elif task_type == "追蹤" and not actual_tracks: st.warning("⚠️ 請至少勾選或填寫一項追蹤內容！")
         elif task_type == "其他" and not other_desc.strip(): st.warning("⚠️ 請填寫協助事項！")
         else:
             new_task = {
@@ -623,7 +662,6 @@ def np_interface():
                     b1, b2 = st.columns(2)
                     with b1:
                         if st.button(f"👉 點我接單", key=f"tk_{t['id']}", use_container_width=True):
-                            # [關鍵修正]：讀取最新狀態避免覆蓋
                             latest_tasks = load_data()
                             for i in range(len(latest_tasks)):
                                 if latest_tasks[i]['id'] == t['id']:
@@ -632,7 +670,7 @@ def np_interface():
                                     latest_tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
                             save_data(latest_tasks)
                             reset_to_standby() 
-                            st.rerun() # 強制刷新
+                            st.rerun() 
                     with b2:
                         if st.button(f"👨‍⚕️ 醫師已完成", key=f"dd_{t['id']}", use_container_width=True):
                             np_feedback_dialog(t['id'], is_doc_assisted=True)
@@ -713,7 +751,7 @@ def whiteboard_interface():
             st.subheader("⚡ 專師執行動態")
             if in_prog:
                 dfg = pd.DataFrame(in_prog)[['handler', 'priority', 'bed', 'task_type', 'start_time']]
-                dfg['start_time'] = dfg['start_time'].str[11:16]; dfg.columns = ['處理專師', '優先級', '位置/病患', '任務', '接單時間']
+                dfg['start_time'] = dfg['start_time'].str[11:16]; dfg.columns = ['專師', '優先級', '位置/病患', '任務', '接單時間']
                 st.dataframe(dfg, use_container_width=True, hide_index=True)
             else:
                 st.info("目前無正在執行的任務。")
