@@ -219,6 +219,17 @@ def reset_to_standby():
     st.session_state.is_standby = True
     st.session_state.op_mode_start = None
 
+# --- UI 輔助函數：展開式複選框矩陣 ---
+def checkbox_matrix(options, num_columns=4):
+    """將選項攤平為 checkbox 矩陣，方便一目瞭然的複選"""
+    selected = []
+    cols = st.columns(num_columns)
+    for i, option in enumerate(options):
+        with cols[i % num_columns]:
+            if st.checkbox(option, key=f"matrix_{option}"):
+                selected.append(option)
+    return selected
+
 # --- 確認彈出視窗 ---
 @st.dialog("⚠️ 確認派發任務")
 def confirm_dispatch_dialog(new_task, require_prep=False, require_hd_consent=False):
@@ -280,7 +291,6 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
         feedback_text = st.text_input("處理結果備註", value="醫師已於現場協助處理完畢")
     else:
         if task['task_type'] == "Suture (縫合)":
-            # 回報時也全改為 radio / multiselect (若適合)
             thread_choice = st.radio("實際使用縫線", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "其他 (自行輸入)"], horizontal=True)
             if thread_choice == "其他 (自行輸入)":
                 thread = st.text_input("請輸入自訂縫線", placeholder="例如: Prolene 4-0")
@@ -421,7 +431,13 @@ def assigner_interface(view_role="護理師"):
     details = ""
     med_details = ""; consult_dept_str = ""; hd_days = []; spec_type = ""; wound_sub = []
     wound_part_sub = []; diag_lang = ""; photo_part = ""; other_desc = ""; icu_type = ""
-    consult_dept_subs = []; s_part_subs = []; s_line_subs = []
+    
+    # 接收勾選結果的變數
+    actual_s_parts = []
+    actual_s_lines = []
+    actual_consult_depts = []
+    actual_wound_parts = []
+    actual_wounds = []
     
     with st.container(border=True):
         st.markdown("##### 填寫詳細設定")
@@ -439,50 +455,37 @@ def assigner_interface(view_role="護理師"):
             details = f"目的: {actual_ng}"
             
         elif task_type == "Suture (縫合)":
-            # 縫合改為複選 (multiselect) 並提供自行輸入欄位
-            s_part_subs = st.multiselect("縫合部位 (可複選)", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子", "其他 (自行輸入)"])
-            actual_s_parts = []
-            for p in s_part_subs:
-                if p == "其他 (自行輸入)":
-                    custom_p = st.text_input("請輸入其他部位 (必填)")
-                    actual_s_parts.append(custom_p if custom_p else "其他(未填)")
-                else:
-                    actual_s_parts.append(p)
-            s_part_str = " + ".join(actual_s_parts) if actual_s_parts else "未選擇部位"
+            st.write("縫合部位 (可複選):")
+            s_parts = ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"]
+            selected_s_parts = checkbox_matrix(s_parts, num_columns=5)
+            custom_s_part = st.text_input("其他縫合部位 (自行輸入)")
+            if custom_s_part: selected_s_parts.append(custom_s_part)
+            s_part_str = " + ".join(selected_s_parts) if selected_s_parts else "未選擇部位"
+            actual_s_parts = selected_s_parts # 供後續防呆檢查
             
-            s_line_subs = st.multiselect("縫線選擇 (可複選)", [
-                "Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", 
-                "由專科護理師自行評估", "其他 (自行輸入)"
-            ])
-            actual_s_lines = []
-            for l in s_line_subs:
-                if l == "其他 (自行輸入)":
-                    custom_l = st.text_input("請輸入自訂縫線 (必填)")
-                    actual_s_lines.append(custom_l if custom_l else "其他(未填)")
-                else:
-                    actual_s_lines.append(l)
-            s_line_str = " + ".join(actual_s_lines) if actual_s_lines else "未選擇縫線"
+            st.write("縫線選擇 (可複選):")
+            s_lines = ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "由專科護理師自行評估"]
+            selected_s_lines = checkbox_matrix(s_lines, num_columns=4)
+            custom_s_line = st.text_input("其他縫線 (自行輸入)")
+            if custom_s_line: selected_s_lines.append(custom_s_line)
+            s_line_str = " + ".join(selected_s_lines) if selected_s_lines else "未選擇縫線"
+            actual_s_lines = selected_s_lines # 供後續防呆檢查
             
             details = f"部位: {s_part_str} | 縫線: {s_line_str}"
             
         elif task_type == "會診":
-            # 會診改為複選 (multiselect)
-            consult_dept_subs = st.multiselect("會診科別 (可複選)", [
+            st.write("會診科別 (可複選):")
+            depts = [
                 "ENT (耳鼻喉科)", "OPH (眼科)", "PS (整形外科)", "GS (一般外科)", 
                 "CVS (心臟血管外科)", "GU (泌尿科)", "Ortho (骨科)", "NS (神經外科)",
-                "GYN (婦產科)", "CV (心臟內科)", "Hospice (安寧/家醫科)", "INF (感染科)",
-                "其他 (自行輸入)"
-            ])
+                "GYN (婦產科)", "CV (心臟內科)", "Hospice (安寧/家醫科)", "INF (感染科)"
+            ]
+            selected_depts = checkbox_matrix(depts, num_columns=4)
+            custom_dept = st.text_input("其他會診科別 (自行輸入)")
+            if custom_dept: selected_depts.append(custom_dept)
+            actual_consult_depts = selected_depts # 供後續防呆檢查
             
-            actual_consult_depts = []
-            for d in consult_dept_subs:
-                if d == "其他 (自行輸入)":
-                    custom_d = st.text_input("請輸入其他會診科別 (必填)")
-                    actual_consult_depts.append(custom_d if custom_d else "其他(未填)")
-                else:
-                    actual_consult_depts.append(d)
-            
-            consult_dept_str = " + ".join(actual_consult_depts) if actual_consult_depts else "未選擇"
+            consult_dept_str = " + ".join(selected_depts) if selected_depts else "未選擇科別"
             details = f"科別: {consult_dept_str}"
             
         elif task_type == "藥物開立":
@@ -490,7 +493,10 @@ def assigner_interface(view_role="護理師"):
             
         elif task_type == "安排洗腎":
             if view_role == "醫師": st.info("💡 醫師提醒：請務必完成「洗腎同意書」！")
-            hd_days = st.multiselect("平常洗腎日", ["週一", "週二", "週三", "週四", "週五", "週六", "初次洗腎"])
+            st.write("平常洗腎日 (可複選):")
+            hd_day_opts = ["週一", "週二", "週三", "週四", "週五", "週六", "初次洗腎"]
+            hd_days = checkbox_matrix(hd_day_opts, num_columns=4)
+            
             hd_location = st.radio("地點", ["本院", "外院", "不明"], horizontal=True)
             days_str = ",".join(hd_days) if hd_days else "未勾選"
             details = f"洗腎日: {days_str} | 地點: {hd_location}"
@@ -498,25 +504,21 @@ def assigner_interface(view_role="護理師"):
         elif task_type == "檢體採集":
             spec_type = st.radio("採集內容", ["鼻口腔黏膜", "傷口"], horizontal=True)
             if spec_type == "傷口":
-                wound_part_sub = st.multiselect("傷口部位 (可複選)", ["頭頸部", "軀幹", "上肢", "下肢", "臀部/會陰", "其他 (自行輸入)"])
-                actual_wound_parts = []
-                for wp in wound_part_sub:
-                    if wp == "其他 (自行輸入)":
-                        custom_wp = st.text_input("請輸入其他傷口部位")
-                        actual_wound_parts.append(custom_wp if custom_wp else "其他(未填)")
-                    else:
-                        actual_wound_parts.append(wp)
-                wound_part_str = " + ".join(actual_wound_parts) if actual_wound_parts else "未選擇部位"
+                st.write("傷口部位 (可複選):")
+                wp_opts = ["頭頸部", "軀幹", "上肢", "下肢", "臀部/會陰"]
+                selected_wps = checkbox_matrix(wp_opts, num_columns=5)
+                custom_wp = st.text_input("其他傷口部位 (自行輸入)")
+                if custom_wp: selected_wps.append(custom_wp)
+                actual_wound_parts = selected_wps
+                wound_part_str = " + ".join(selected_wps) if selected_wps else "未選擇部位"
                 
-                wound_sub = st.multiselect("傷口培養類別 (可複選)", ["嗜氧", "厭氧", "其他 (自行備註)"])
-                actual_wounds = []
-                for w in wound_sub:
-                    if w == "其他 (自行備註)":
-                        custom_w = st.text_input("請輸入其他培養類別")
-                        actual_wounds.append(custom_w if custom_w else "其他(未填)")
-                    else:
-                        actual_wounds.append(w)
-                wound_str = " + ".join(actual_wounds) if actual_wounds else "未選擇培養"
+                st.write("傷口培養類別 (可複選):")
+                w_opts = ["嗜氧", "厭氧"]
+                selected_ws = checkbox_matrix(w_opts, num_columns=2)
+                custom_w = st.text_input("其他培養類別 (自行備註)")
+                if custom_w: selected_ws.append(custom_w)
+                actual_wounds = selected_ws
+                wound_str = " + ".join(selected_ws) if selected_ws else "未選擇培養"
                 
                 details = f"內容: 傷口 | 部位: {wound_part_str} | 培養: {wound_str}"
             else:
@@ -552,16 +554,16 @@ def assigner_interface(view_role="護理師"):
     no_prep_tasks = ["會診", "藥物開立", "訂ICU", "開診斷書"]
     
     if st.button("🚀 準備派發任務", use_container_width=True, type="primary"):
-        # 防呆檢查
+        # 防呆檢查 (對應新的變數)
         if check_pii(patient_name, details, bed_note, consult_dept_str, med_details, global_memo, other_desc):
             st.error("⚠️ 資安警告：偵測到疑似身分證字號！已攔截派發。"); st.stop()
             
         if area == "病患無床位" and not patient_name.strip(): st.warning("⚠️ 請填寫病患姓名！")
-        elif task_type == "Suture (縫合)" and not s_part_subs: st.warning("⚠️ 請至少選擇一個縫合部位！")
-        elif task_type == "Suture (縫合)" and not s_line_subs: st.warning("⚠️ 請至少選擇一種縫線！")
-        elif task_type == "會診" and not consult_dept_subs: st.warning("⚠️ 請至少選擇一個會診科別！")
+        elif task_type == "Suture (縫合)" and not actual_s_parts: st.warning("⚠️ 請至少選擇一個縫合部位！")
+        elif task_type == "Suture (縫合)" and not actual_s_lines: st.warning("⚠️ 請至少選擇一種縫線！")
+        elif task_type == "會診" and not actual_consult_depts: st.warning("⚠️ 請至少選擇一個會診科別！")
         elif task_type == "藥物開立" and not med_details.strip(): st.warning("⚠️ 請填寫藥物說明！")
-        elif task_type == "檢體採集" and spec_type == "傷口" and (not wound_sub or not wound_part_sub): st.warning("⚠️ 傷口採集請務必勾選「部位」與「培養類別」！")
+        elif task_type == "檢體採集" and spec_type == "傷口" and (not actual_wounds or not actual_wound_parts): st.warning("⚠️ 傷口採集請務必勾選「部位」與「培養類別」！")
         elif task_type == "拍照" and not photo_part.strip(): st.warning("⚠️ 請填寫拍照部位！")
         elif task_type == "其他" and not other_desc.strip(): st.warning("⚠️ 請填寫協助事項！")
         else:
@@ -697,8 +699,7 @@ def whiteboard_interface():
             st.subheader("🚨 未接單清單")
             if pending:
                 dfp = pd.DataFrame(pending)[['time', 'priority', 'bed', 'task_type', 'requester']]
-                dfp['time'] = dfp['time'].str[11:16]
-                dfp.columns = ['發布時間', '優先級', '位置/病患', '任務', '發布者']
+                dfp['time'] = dfp['time'].str[11:16]; dfp.columns = ['時間', '優先級', '位置/病患', '任務', '發布者']
                 st.dataframe(dfp, use_container_width=True, hide_index=True)
             else:
                 st.success("目前無積壓任務！")
@@ -707,8 +708,7 @@ def whiteboard_interface():
             st.subheader("⚡ 專師執行動態")
             if in_prog:
                 dfg = pd.DataFrame(in_prog)[['handler', 'priority', 'bed', 'task_type', 'start_time']]
-                dfg['start_time'] = dfg['start_time'].str[11:16]
-                dfg.columns = ['處理專師', '優先級', '位置/病患', '任務', '接單時間']
+                dfg['start_time'] = dfg['start_time'].str[11:16]; dfg.columns = ['專師', '優先級', '位置/病患', '任務', '接單時間']
                 st.dataframe(dfg, use_container_width=True, hide_index=True)
             else:
                 st.info("目前無正在執行的任務。")
