@@ -280,16 +280,14 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
         feedback_text = st.text_input("處理結果備註", value="醫師已於現場協助處理完畢")
     else:
         if task['task_type'] == "Suture (縫合)":
-            col_s1, col_s2 = st.columns(2)
-            with col_s1:
-                thread_choice = st.radio("實際使用縫線", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "其他 (自行輸入)"], horizontal=True)
-                if thread_choice == "其他 (自行輸入)":
-                    thread = st.text_input("請輸入自訂縫線", placeholder="例如: Prolene 4-0")
-                    if not thread: thread = "未填寫"
-                else:
-                    thread = thread_choice
-            with col_s2:
-                stitches = st.number_input("縫合針數", min_value=1, max_value=50, value=3, step=1)
+            # 回報時也全改為 radio / multiselect (若適合)
+            thread_choice = st.radio("實際使用縫線", ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "其他 (自行輸入)"], horizontal=True)
+            if thread_choice == "其他 (自行輸入)":
+                thread = st.text_input("請輸入自訂縫線", placeholder="例如: Prolene 4-0")
+                if not thread: thread = "未填寫"
+            else:
+                thread = thread_choice
+            stitches = st.number_input("縫合針數", min_value=1, max_value=50, value=3, step=1)
             feedback_text = f"縫線: {thread} | 針數: {stitches} 針"
             
         elif task['task_type'] == "on Foley":
@@ -423,7 +421,7 @@ def assigner_interface(view_role="護理師"):
     details = ""
     med_details = ""; consult_dept_str = ""; hd_days = []; spec_type = ""; wound_sub = []
     wound_part_sub = []; diag_lang = ""; photo_part = ""; other_desc = ""; icu_type = ""
-    consult_dept_subs = []
+    consult_dept_subs = []; s_part_subs = []; s_line_subs = []
     
     with st.container(border=True):
         st.markdown("##### 填寫詳細設定")
@@ -441,21 +439,34 @@ def assigner_interface(view_role="護理師"):
             details = f"目的: {actual_ng}"
             
         elif task_type == "Suture (縫合)":
-            st.write("縫合部位:")
-            s_part = st.radio("部位選擇", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子"], horizontal=True, label_visibility="collapsed")
+            # 縫合改為複選 (multiselect) 並提供自行輸入欄位
+            s_part_subs = st.multiselect("縫合部位 (可複選)", ["左手", "左腳", "右手", "右腳", "胸口", "肚子", "背後", "頭皮", "臉", "脖子", "其他 (自行輸入)"])
+            actual_s_parts = []
+            for p in s_part_subs:
+                if p == "其他 (自行輸入)":
+                    custom_p = st.text_input("請輸入其他部位 (必填)")
+                    actual_s_parts.append(custom_p if custom_p else "其他(未填)")
+                else:
+                    actual_s_parts.append(p)
+            s_part_str = " + ".join(actual_s_parts) if actual_s_parts else "未選擇部位"
             
-            st.write("縫線選擇:")
-            s_line_choice = st.radio("縫線", [
+            s_line_subs = st.multiselect("縫線選擇 (可複選)", [
                 "Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", 
                 "由專科護理師自行評估", "其他 (自行輸入)"
-            ], horizontal=True, label_visibility="collapsed")
+            ])
+            actual_s_lines = []
+            for l in s_line_subs:
+                if l == "其他 (自行輸入)":
+                    custom_l = st.text_input("請輸入自訂縫線 (必填)")
+                    actual_s_lines.append(custom_l if custom_l else "其他(未填)")
+                else:
+                    actual_s_lines.append(l)
+            s_line_str = " + ".join(actual_s_lines) if actual_s_lines else "未選擇縫線"
             
-            if s_line_choice == "其他 (自行輸入)":
-                custom_line = st.text_input("自訂縫線"); actual_line = custom_line if custom_line else "未填寫"
-            else: actual_line = s_line_choice
-            details = f"部位: {s_part} | 縫線: {actual_line}"
+            details = f"部位: {s_part_str} | 縫線: {s_line_str}"
             
         elif task_type == "會診":
+            # 會診改為複選 (multiselect)
             consult_dept_subs = st.multiselect("會診科別 (可複選)", [
                 "ENT (耳鼻喉科)", "OPH (眼科)", "PS (整形外科)", "GS (一般外科)", 
                 "CVS (心臟血管外科)", "GU (泌尿科)", "Ortho (骨科)", "NS (神經外科)",
@@ -541,10 +552,13 @@ def assigner_interface(view_role="護理師"):
     no_prep_tasks = ["會診", "藥物開立", "訂ICU", "開診斷書"]
     
     if st.button("🚀 準備派發任務", use_container_width=True, type="primary"):
+        # 防呆檢查
         if check_pii(patient_name, details, bed_note, consult_dept_str, med_details, global_memo, other_desc):
             st.error("⚠️ 資安警告：偵測到疑似身分證字號！已攔截派發。"); st.stop()
             
         if area == "病患無床位" and not patient_name.strip(): st.warning("⚠️ 請填寫病患姓名！")
+        elif task_type == "Suture (縫合)" and not s_part_subs: st.warning("⚠️ 請至少選擇一個縫合部位！")
+        elif task_type == "Suture (縫合)" and not s_line_subs: st.warning("⚠️ 請至少選擇一種縫線！")
         elif task_type == "會診" and not consult_dept_subs: st.warning("⚠️ 請至少選擇一個會診科別！")
         elif task_type == "藥物開立" and not med_details.strip(): st.warning("⚠️ 請填寫藥物說明！")
         elif task_type == "檢體採集" and spec_type == "傷口" and (not wound_sub or not wound_part_sub): st.warning("⚠️ 傷口採集請務必勾選「部位」與「培養類別」！")
@@ -645,7 +659,6 @@ def np_interface():
             ]
             st.success(random.choice(empty_prog_msgs))
 
-# --- 動態白板介面 (Phase 2: 加入完成紀錄查詢) ---
 def whiteboard_interface():
     st.header("📊 系統動態白板")
     
@@ -653,7 +666,6 @@ def whiteboard_interface():
     
     tasks = load_data()
     
-    # 建立兩個頁籤
     tab_realtime, tab_completed = st.tabs(["🚀 即時動態看板", "✅ 歷史完成紀錄"])
     
     with tab_realtime:
@@ -708,7 +720,6 @@ def whiteboard_interface():
         completed_tasks = []
         for t in tasks:
             if t['status'] == '已完成':
-                # 優先使用完成時間，若無則用發布時間
                 time_str = t.get('complete_time') or t.get('time')
                 if time_str and time_str.startswith(str(selected_date)):
                     completed_tasks.append(t)
