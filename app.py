@@ -219,9 +219,7 @@ def reset_to_standby():
     st.session_state.is_standby = True
     st.session_state.op_mode_start = None
 
-# --- UI 輔助函數：展開式複選框矩陣 ---
 def checkbox_matrix(options, num_columns=4):
-    """將選項攤平為 checkbox 矩陣，方便一目瞭然的複選"""
     selected = []
     cols = st.columns(num_columns)
     for i, option in enumerate(options):
@@ -323,19 +321,21 @@ def np_feedback_dialog(task_id, is_doc_assisted=False):
 
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("💾 儲存回報並結案", type="primary", use_container_width=True):
-        for i in range(len(tasks)):
-            if tasks[i]['id'] == task_id:
-                tasks[i]['status'] = '已完成'
-                tasks[i]['complete_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
+        # [關鍵修正]：重新讀取最新資料，確保不會蓋掉別人的更新
+        latest_tasks = load_data()
+        for i in range(len(latest_tasks)):
+            if latest_tasks[i]['id'] == task_id:
+                latest_tasks[i]['status'] = '已完成'
+                latest_tasks[i]['complete_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
                 if is_doc_assisted:
-                    tasks[i]['handler'] = f"{st.session_state.nickname} (註記醫師完成)"
+                    latest_tasks[i]['handler'] = f"{st.session_state.nickname} (註記醫師完成)"
                 else:
-                    tasks[i]['handler'] = st.session_state.nickname
-                tasks[i]['feedback'] = feedback_text
-        save_data(tasks)
+                    latest_tasks[i]['handler'] = st.session_state.nickname
+                latest_tasks[i]['feedback'] = feedback_text
+        save_data(latest_tasks)
         st.session_state.success_message = "✅ 任務結案與回報完成！"
         reset_to_standby() 
-        st.rerun()
+        st.rerun() # 立刻強制重繪畫面
 
 @st.dialog("⚠️ 警告：刪除選取的紀錄")
 def delete_selected_dialog(ids_to_delete):
@@ -431,8 +431,8 @@ def assigner_interface(view_role="護理師"):
     details = ""
     med_details = ""; consult_dept_str = ""; hd_days = []; spec_type = ""; wound_sub = []
     wound_part_sub = []; diag_lang = ""; photo_part = ""; other_desc = ""; icu_type = ""
+    consult_dept_subs = []; s_part_subs = []; s_line_subs = []
     
-    # 接收勾選結果的變數
     actual_s_parts = []
     actual_s_lines = []
     actual_consult_depts = []
@@ -461,7 +461,7 @@ def assigner_interface(view_role="護理師"):
             custom_s_part = st.text_input("其他縫合部位 (自行輸入)")
             if custom_s_part: selected_s_parts.append(custom_s_part)
             s_part_str = " + ".join(selected_s_parts) if selected_s_parts else "未選擇部位"
-            actual_s_parts = selected_s_parts # 供後續防呆檢查
+            actual_s_parts = selected_s_parts 
             
             st.write("縫線選擇 (可複選):")
             s_lines = ["Nylon 1-0", "Nylon 2-0", "Nylon 3-0", "Nylon 4-0", "Nylon 5-0", "Nylon 6-0", "由專科護理師自行評估"]
@@ -469,7 +469,7 @@ def assigner_interface(view_role="護理師"):
             custom_s_line = st.text_input("其他縫線 (自行輸入)")
             if custom_s_line: selected_s_lines.append(custom_s_line)
             s_line_str = " + ".join(selected_s_lines) if selected_s_lines else "未選擇縫線"
-            actual_s_lines = selected_s_lines # 供後續防呆檢查
+            actual_s_lines = selected_s_lines 
             
             details = f"部位: {s_part_str} | 縫線: {s_line_str}"
             
@@ -483,7 +483,7 @@ def assigner_interface(view_role="護理師"):
             selected_depts = checkbox_matrix(depts, num_columns=4)
             custom_dept = st.text_input("其他會診科別 (自行輸入)")
             if custom_dept: selected_depts.append(custom_dept)
-            actual_consult_depts = selected_depts # 供後續防呆檢查
+            actual_consult_depts = selected_depts 
             
             consult_dept_str = " + ".join(selected_depts) if selected_depts else "未選擇科別"
             details = f"科別: {consult_dept_str}"
@@ -554,7 +554,6 @@ def assigner_interface(view_role="護理師"):
     no_prep_tasks = ["會診", "藥物開立", "訂ICU", "開診斷書"]
     
     if st.button("🚀 準備派發任務", use_container_width=True, type="primary"):
-        # 防呆檢查 (對應新的變數)
         if check_pii(patient_name, details, bed_note, consult_dept_str, med_details, global_memo, other_desc):
             st.error("⚠️ 資安警告：偵測到疑似身分證字號！已攔截派發。"); st.stop()
             
@@ -624,10 +623,16 @@ def np_interface():
                     b1, b2 = st.columns(2)
                     with b1:
                         if st.button(f"👉 點我接單", key=f"tk_{t['id']}", use_container_width=True):
-                            for i in range(len(tasks)):
-                                if tasks[i]['id'] == t['id']:
-                                    tasks[i]['status'] = '執行中'; tasks[i]['handler'] = st.session_state.nickname; tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
-                            save_data(tasks); reset_to_standby(); st.rerun()
+                            # [關鍵修正]：讀取最新狀態避免覆蓋
+                            latest_tasks = load_data()
+                            for i in range(len(latest_tasks)):
+                                if latest_tasks[i]['id'] == t['id']:
+                                    latest_tasks[i]['status'] = '執行中'
+                                    latest_tasks[i]['handler'] = st.session_state.nickname
+                                    latest_tasks[i]['start_time'] = get_tw_time().strftime("%Y-%m-%d %H:%M:%S")
+                            save_data(latest_tasks)
+                            reset_to_standby() 
+                            st.rerun() # 強制刷新
                     with b2:
                         if st.button(f"👨‍⚕️ 醫師已完成", key=f"dd_{t['id']}", use_container_width=True):
                             np_feedback_dialog(t['id'], is_doc_assisted=True)
@@ -699,7 +704,7 @@ def whiteboard_interface():
             st.subheader("🚨 未接單清單")
             if pending:
                 dfp = pd.DataFrame(pending)[['time', 'priority', 'bed', 'task_type', 'requester']]
-                dfp['time'] = dfp['time'].str[11:16]; dfp.columns = ['時間', '優先級', '位置/病患', '任務', '發布者']
+                dfp['time'] = dfp['time'].str[11:16]; dfp.columns = ['發布時間', '優先級', '位置/病患', '任務', '發布者']
                 st.dataframe(dfp, use_container_width=True, hide_index=True)
             else:
                 st.success("目前無積壓任務！")
@@ -708,7 +713,7 @@ def whiteboard_interface():
             st.subheader("⚡ 專師執行動態")
             if in_prog:
                 dfg = pd.DataFrame(in_prog)[['handler', 'priority', 'bed', 'task_type', 'start_time']]
-                dfg['start_time'] = dfg['start_time'].str[11:16]; dfg.columns = ['專師', '優先級', '位置/病患', '任務', '接單時間']
+                dfg['start_time'] = dfg['start_time'].str[11:16]; dfg.columns = ['處理專師', '優先級', '位置/病患', '任務', '接單時間']
                 st.dataframe(dfg, use_container_width=True, hide_index=True)
             else:
                 st.info("目前無正在執行的任務。")
