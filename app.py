@@ -806,6 +806,91 @@ def backend_interface():
     with c3:
         if st.button("🚨 清除全部", use_container_width=True, type="primary"): clear_records_dialog()
 
+
+# ==========================================
+# 🏆 專科護理師專屬：成就與續命系統
+# ==========================================
+def render_achievement_system():
+    tasks = load_data()
+    # 算出該專師「歷史所有」完成的任務
+    my_all_tasks = [t for t in tasks if t['status'] == '已完成' and t.get('handler') == st.session_state.nickname]
+    total_count = len(my_all_tasks)
+
+    # 算出該專師「今天」完成的任務
+    today_str = get_tw_time().strftime("%Y-%m-%d")
+    my_today_tasks = [t for t in my_all_tasks if t.get('complete_time', '').startswith(today_str)]
+    today_count = len(my_today_tasks)
+
+    # --- 1. RPG 稱號與生命之樹 (依據歷史總數) ---
+    if total_count < 10: tree, title = "🌱", "急診小白鴿"
+    elif total_count < 50: tree, title = "🌿", "熱血專師"
+    elif total_count < 100: tree, title = "🌳", "急診龍捲風"
+    elif total_count < 300: tree, title = "🌸", "千手觀音"
+    else: tree, title = "🍎", "急診傳說"
+
+    with st.sidebar.expander("🏆 我的專師成就與能量", expanded=True):
+        st.markdown(f"<h3 style='text-align: center;'>{tree} {title}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align: center; color: gray;'>生涯累計：{total_count} 件</p>", unsafe_allow_html=True)
+        st.markdown("---")
+
+        # --- 2. 🔋 10件續命能量系統 (依據今日數量) ---
+        st.write("🥤 **今日續命能量條**")
+        energy = today_count % 10
+        
+        # 剛好完成 10 的倍數時，能量條顯示全滿，並跳出強制休息警告
+        if today_count > 0 and energy == 0:
+            energy_display = 10
+            st.progress(1.0)
+            st.error("🚨 **能量耗盡警告！**\n您已連續完成 10 件任務，請立刻放下手邊工作，去休息室喝水、補充能量！🍩☕")
+        else:
+            energy_display = energy
+            st.progress(energy_display / 10.0)
+            st.caption(f"🔋 累積進度：{energy_display} / 10 (滿 10 件請去休息！)")
+
+        st.markdown("---")
+
+        # --- 3. 🥠 每日盲盒系統 (今日滿 5 件解鎖) ---
+        if today_count >= 5:
+            if "daily_fortune" not in st.session_state:
+                st.session_state.daily_fortune = ""
+            
+            if not st.session_state.daily_fortune:
+                if st.button("🥠 解鎖今日急診盲盒", use_container_width=True):
+                    fortunes = [
+                        "🌟 大吉：今日絕對準時交班，不帶賽！", 
+                        "🌟 中吉：下半場平靜無波，沒有 CPR！", 
+                        "✨ 小吉：等一下會有家屬請喝飲料！", 
+                        "🥥 神明保佑：獲得虛擬乖乖一包，機台不當機！"
+                    ]
+                    st.session_state.daily_fortune = random.choice(fortunes)
+                    st.rerun()
+            else:
+                st.success(st.session_state.daily_fortune)
+        else:
+            st.caption(f"🔒 再完成 {5 - today_count} 件任務解鎖盲盒")
+
+        st.markdown("---")
+
+        # --- 4. 🎖️ 隱藏版成就徽章牆 (各項滿 20 件解鎖) ---
+        st.write("🎖️ **榮譽徽章牆**")
+        foley_count = len([t for t in my_all_tasks if t['task_type'] == 'on Foley'])
+        ng_count = len([t for t in my_all_tasks if t['task_type'] == 'on NG'])
+        suture_count = len([t for t in my_all_tasks if t['task_type'] == 'Suture (縫合)'])
+        blood_count = len([t for t in my_all_tasks if t['task_type'] == '檢體採集'])
+
+        badges = []
+        if foley_count >= 20: badges.append("🎯 Foley狙擊手")
+        if ng_count >= 20: badges.append("🍝 鼻胃管大師")
+        if suture_count >= 20: badges.append("🪡 急診神裁縫")
+        if blood_count >= 20: badges.append("🩸 吸血鬼伯爵")
+
+        if badges:
+            for b in badges:
+                st.markdown(f"✅ `{b}`")
+        else:
+            st.caption("尚未解鎖徽章 (各類任務滿 20 件自動解鎖)")
+
+
 def main():
     if st.session_state.is_logged_in: 
         update_online_status(st.session_state.nickname, st.session_state.role)
@@ -859,6 +944,11 @@ def main():
                 
             page = st.radio("系統選單", pages, index=default_index, label_visibility="collapsed")
             st.markdown("---")
+
+            # --- 加入成就系統 ---
+            if st.session_state.role == "專科護理師":
+                render_achievement_system()
+                
             st.caption("© 2026 護理師 吳智弘 版權所有")
             
         if page == "👩‍⚕️ 護理師派發": assigner_interface(view_role="護理師")
